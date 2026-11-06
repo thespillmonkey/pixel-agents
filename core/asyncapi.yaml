@@ -140,6 +140,7 @@ components:
         - $ref: '#/components/schemas/SetSoundEnabled'
         - $ref: '#/components/schemas/SetLastSeenVersion'
         - $ref: '#/components/schemas/SetAlwaysShowLabels'
+        - $ref: '#/components/schemas/SetCleanerAgentLabels'
         - $ref: '#/components/schemas/SetGhostHeadlessAgents'
         - $ref: '#/components/schemas/SetHooksEnabled'
         - $ref: '#/components/schemas/HooksConsentResponse'
@@ -653,6 +654,7 @@ components:
         - extensionVersion
         - watchAllSessions
         - alwaysShowLabels
+        - cleanerAgentLabels
         - ghostHeadlessAgents
         - hooksEnabled
         - hooksInfoShown
@@ -672,6 +674,8 @@ components:
         watchAllSessions:
           type: boolean
         alwaysShowLabels:
+          type: boolean
+        cleanerAgentLabels:
           type: boolean
         ghostHeadlessAgents:
           type: boolean
@@ -1065,6 +1069,16 @@ components:
       properties:
         type:
           const: setAlwaysShowLabels
+        enabled:
+          type: boolean
+
+    SetCleanerAgentLabels:
+      type: object
+      additionalProperties: false
+      required: [type, enabled]
+      properties:
+        type:
+          const: setCleanerAgentLabels
         enabled:
           type: boolean
 

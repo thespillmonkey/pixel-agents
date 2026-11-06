@@ -58,6 +58,7 @@ export type ClientMessage =
   | SetSoundEnabled
   | SetLastSeenVersion
   | SetAlwaysShowLabels
+  | SetCleanerAgentLabels
   | SetGhostHeadlessAgents
   | SetHooksEnabled
   | HooksConsentResponse
@@ -288,6 +289,7 @@ export interface SettingsLoaded {
   extensionVersion: string;
   watchAllSessions: boolean;
   alwaysShowLabels: boolean;
+  cleanerAgentLabels: boolean;
   ghostHeadlessAgents: boolean;
   hooksEnabled: boolean;
   hooksInfoShown: boolean;
@@ -423,6 +425,11 @@ export interface SetLastSeenVersion {
 
 export interface SetAlwaysShowLabels {
   type: 'setAlwaysShowLabels';
+  enabled: boolean;
+}
+
+export interface SetCleanerAgentLabels {
+  type: 'setCleanerAgentLabels';
   enabled: boolean;
 }
 

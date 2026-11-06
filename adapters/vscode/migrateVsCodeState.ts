@@ -26,6 +26,7 @@ const SETTINGS_MIGRATIONS: readonly { vscodeKey: string; settingKey: string }[] 
   { vscodeKey: 'pixel-agents.soundEnabled', settingKey: 'pixel-agents.soundEnabled' },
   { vscodeKey: 'pixel-agents.lastSeenVersion', settingKey: 'pixel-agents.lastSeenVersion' },
   { vscodeKey: 'pixel-agents.alwaysShowLabels', settingKey: 'pixel-agents.alwaysShowLabels' },
+  { vscodeKey: 'pixel-agents.cleanerAgentLabels', settingKey: 'pixel-agents.cleanerAgentLabels' },
   { vscodeKey: 'pixel-agents.watchAllSessions', settingKey: 'pixel-agents.watchAllSessions' },
   { vscodeKey: 'pixel-agents.hooksInfoShown', settingKey: 'pixel-agents.hooksInfoShown' },
 ];

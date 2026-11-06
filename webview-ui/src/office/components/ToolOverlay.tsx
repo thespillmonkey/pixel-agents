@@ -49,6 +49,7 @@ interface ToolOverlayProps {
   panRef: React.RefObject<{ x: number; y: number }>;
   onCloseAgent: (id: number) => void;
   alwaysShowOverlay: boolean;
+  cleanerAgentLabels: boolean;
 }
 
 function getFuelColor(ratio: number): string {
@@ -90,6 +91,7 @@ export function ToolOverlay({
   panRef,
   onCloseAgent,
   alwaysShowOverlay,
+  cleanerAgentLabels,
 }: ToolOverlayProps) {
   const [, setTick] = useState(0);
   useEffect(() => {
@@ -243,7 +245,8 @@ export function ToolOverlay({
 
         // Team info
         const teamRoleLabel = ch.isTeamLead ? 'LEAD' : ch.agentName || null;
-        const hasExtraLines = !!(ch.directoryName || teamRoleLabel);
+        const directoryLabel = cleanerAgentLabels ? null : ch.directoryName;
+        const hasExtraLines = !!(directoryLabel || teamRoleLabel);
 
         // Context gauge. Every agent gets one — lead, teammate, adopted,
         // headless — as soon as it has taken a turn. Sub-agents never do: they
@@ -295,9 +298,9 @@ export function ToolOverlay({
                   >
                     {activityText}
                   </span>
-                  {ch.directoryName && (
+                  {directoryLabel && (
                     <span className="text-2xs leading-none overflow-hidden text-ellipsis block">
-                      {ch.directoryName}
+                      {directoryLabel}
                     </span>
                   )}
                 </div>

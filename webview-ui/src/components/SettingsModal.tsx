@@ -15,6 +15,8 @@ interface SettingsModalProps {
   onToggleDebugMode: () => void;
   alwaysShowOverlay: boolean;
   onToggleAlwaysShowOverlay: () => void;
+  cleanerAgentLabels: boolean;
+  onToggleCleanerAgentLabels: () => void;
   /** Whether headless agents (adopted, no terminal to focus) render translucent. */
   ghostHeadlessAgents: boolean;
   onToggleGhostHeadlessAgents: () => void;
@@ -51,6 +53,8 @@ export function SettingsModal({
   onToggleDebugMode,
   alwaysShowOverlay,
   onToggleAlwaysShowOverlay,
+  cleanerAgentLabels,
+  onToggleCleanerAgentLabels,
   ghostHeadlessAgents,
   onToggleGhostHeadlessAgents,
   externalAssetDirectories,
@@ -203,6 +207,11 @@ export function SettingsModal({
         label="Always Show Labels"
         checked={alwaysShowOverlay}
         onChange={onToggleAlwaysShowOverlay}
+      />
+      <Checkbox
+        label="Cleaner Agent Labels"
+        checked={cleanerAgentLabels}
+        onChange={onToggleCleanerAgentLabels}
       />
       {/* Headless agents are the office's only terminal-less citizens in VS Code.
           Standalone has no terminals at all, so nothing there would ever ghost. */}

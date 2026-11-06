@@ -74,6 +74,7 @@ import {
   CONFIG_KEY_AUTO_SPAWN_AGENT,
   GLOBAL_KEY_ALWAYS_SHOW_LABELS,
   GLOBAL_KEY_BYPASS_PERMISSIONS,
+  GLOBAL_KEY_CLEANER_AGENT_LABELS,
   GLOBAL_KEY_GHOST_HEADLESS_AGENTS,
   GLOBAL_KEY_HOOKS_INFO_SHOWN,
   GLOBAL_KEY_LAST_SEEN_VERSION,
@@ -540,6 +541,8 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         this.adapter.setSetting(GLOBAL_KEY_LAST_SEEN_VERSION, message.version as string);
       } else if (message.type === 'setAlwaysShowLabels') {
         this.adapter.setSetting(GLOBAL_KEY_ALWAYS_SHOW_LABELS, message.enabled);
+      } else if (message.type === 'setCleanerAgentLabels') {
+        this.adapter.setSetting(GLOBAL_KEY_CLEANER_AGENT_LABELS, message.enabled);
       } else if (message.type === 'setGhostHeadlessAgents') {
         this.adapter.setSetting(GLOBAL_KEY_GHOST_HEADLESS_AGENTS, message.enabled);
       } else if (message.type === 'setHooksEnabled') {
@@ -665,6 +668,10 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           GLOBAL_KEY_ALWAYS_SHOW_LABELS,
           false,
         );
+        const cleanerAgentLabels = this.adapter.getSetting<boolean>(
+          GLOBAL_KEY_CLEANER_AGENT_LABELS,
+          false,
+        );
         const ghostHeadlessAgents = this.adapter.getSetting<boolean>(
           GLOBAL_KEY_GHOST_HEADLESS_AGENTS,
           false,
@@ -692,6 +699,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           extensionVersion,
           watchAllSessions,
           alwaysShowLabels,
+          cleanerAgentLabels,
           ghostHeadlessAgents,
           hooksEnabled,
           hooksInfoShown,

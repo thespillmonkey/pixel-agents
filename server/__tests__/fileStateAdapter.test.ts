@@ -63,6 +63,21 @@ describe('FileStateAdapter', () => {
     expect(adapter.getSetting('pixel-agents.bypassPermissions', false)).toBe(true);
   });
 
+  it('defaults cleaner labels off and reloads them in both adapter namespaces', () => {
+    for (const namespace of ['standalone', 'vscode'] as const) {
+      const adapter = new FileStateAdapter({ namespace });
+      expect(adapter.getSetting('pixel-agents.cleanerAgentLabels', true)).toBe(false);
+      adapter.setSetting('pixel-agents.cleanerAgentLabels', true);
+      const reloaded = new FileStateAdapter({ namespace });
+      expect(reloaded.getSetting('pixel-agents.cleanerAgentLabels', false)).toBe(true);
+      expect(reloaded.getSetting('pixel-agents.alwaysShowLabels', true)).toBe(false);
+      reloaded.setSetting('pixel-agents.cleanerAgentLabels', false);
+      expect(
+        new FileStateAdapter({ namespace }).getSetting('pixel-agents.cleanerAgentLabels', true),
+      ).toBe(false);
+    }
+  });
+
   it('defaults bypassPermissions to off and keeps it per-namespace', () => {
     const vscode = new FileStateAdapter({ namespace: 'vscode' });
     const standalone = new FileStateAdapter({ namespace: 'standalone' });

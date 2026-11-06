@@ -97,6 +97,21 @@ describe('clientMessageHandler: areas + carpet wire ordering', () => {
   // ── saveAreaMappings ─────────────────────────────────────────
 
   describe('saveAreaMappings', () => {
+    it('persists cleaner labels and returns them on reconnect without changing always-show', () => {
+      handleClientMessage(
+        { type: 'setCleanerAgentLabels', enabled: true },
+        (m) => sent.push(m),
+        ctx,
+      );
+      expect(readConfig().standalone.cleanerAgentLabels).toBe(true);
+      expect(readConfig().standalone.alwaysShowLabels).toBe(false);
+      handleClientMessage({ type: 'webviewReady' }, (m) => sent.push(m), ctx);
+      expect(sent.find((m) => m.type === 'settingsLoaded')).toMatchObject({
+        cleanerAgentLabels: true,
+        alwaysShowLabels: false,
+      });
+    });
+
     it('persists a valid mapping payload to cfg.standalone.areaMappings', () => {
       handleClientMessage(
         {
@@ -1241,6 +1256,7 @@ describe('clientMessageHandler: read-only (untokened) clients', () => {
       { type: 'setSoundEnabled', enabled: false },
       { type: 'setLastSeenVersion', version: '9.9' },
       { type: 'setAlwaysShowLabels', enabled: true },
+      { type: 'setCleanerAgentLabels', enabled: true },
       { type: 'setGhostHeadlessAgents', enabled: true },
       { type: 'setWatchAllSessions', enabled: true },
       { type: 'setHooksEnabled', providerId: 'claude', enabled: false },

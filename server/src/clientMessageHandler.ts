@@ -85,6 +85,7 @@ export interface ClientMessageContext {
 const KEY_SOUND_ENABLED = 'pixel-agents.soundEnabled';
 const KEY_LAST_SEEN_VERSION = 'pixel-agents.lastSeenVersion';
 const KEY_ALWAYS_SHOW_LABELS = 'pixel-agents.alwaysShowLabels';
+const KEY_CLEANER_AGENT_LABELS = 'pixel-agents.cleanerAgentLabels';
 const KEY_GHOST_HEADLESS_AGENTS = 'pixel-agents.ghostHeadlessAgents';
 const KEY_WATCH_ALL_SESSIONS = 'pixel-agents.watchAllSessions';
 const KEY_HOOKS_INFO_SHOWN = 'pixel-agents.hooksInfoShown';
@@ -242,6 +243,10 @@ export function handleClientMessage(
 
     case 'setAlwaysShowLabels':
       adapter?.setSetting(KEY_ALWAYS_SHOW_LABELS, msg.enabled);
+      break;
+
+    case 'setCleanerAgentLabels':
+      adapter?.setSetting(KEY_CLEANER_AGENT_LABELS, msg.enabled);
       break;
 
     case 'setGhostHeadlessAgents':
@@ -664,6 +669,7 @@ function settingsSnapshot(adapter: StateAdapter | undefined) {
     extensionVersion: process.env.PIXEL_AGENTS_VERSION ?? '',
     watchAllSessions: adapter?.getSetting(KEY_WATCH_ALL_SESSIONS, false) ?? false,
     alwaysShowLabels: adapter?.getSetting(KEY_ALWAYS_SHOW_LABELS, false) ?? false,
+    cleanerAgentLabels: adapter?.getSetting(KEY_CLEANER_AGENT_LABELS, false) ?? false,
     ghostHeadlessAgents: adapter?.getSetting(KEY_GHOST_HEADLESS_AGENTS, false) ?? false,
     // A single boolean carrying the CLAUDE provider's preference until the
     // Settings UI grows a per-provider list -- its sole webview reader is the
@@ -710,6 +716,7 @@ function refuseReadOnly(
     }
     case 'setSoundEnabled':
     case 'setAlwaysShowLabels':
+    case 'setCleanerAgentLabels':
     case 'setGhostHeadlessAgents':
     case 'setWatchAllSessions':
     case 'setShowAreas':

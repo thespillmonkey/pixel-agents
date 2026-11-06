@@ -8,6 +8,7 @@ export interface AdapterSettings {
   soundEnabled: boolean;
   lastSeenVersion: string;
   alwaysShowLabels: boolean;
+  cleanerAgentLabels: boolean;
   ghostHeadlessAgents: boolean;
   watchAllSessions: boolean;
   hooksInfoShown: boolean;
@@ -28,6 +29,7 @@ export const ADAPTER_SETTING_KEYS = [
   'soundEnabled',
   'lastSeenVersion',
   'alwaysShowLabels',
+  'cleanerAgentLabels',
   'ghostHeadlessAgents',
   'watchAllSessions',
   'hooksInfoShown',
@@ -77,6 +79,7 @@ const DEFAULT_ADAPTER_SETTINGS: AdapterSettings = {
   soundEnabled: true,
   lastSeenVersion: '',
   alwaysShowLabels: false,
+  cleanerAgentLabels: false,
   ghostHeadlessAgents: false,
   watchAllSessions: false,
   hooksInfoShown: false,
@@ -174,6 +177,10 @@ function parseAdapterSettings(raw: unknown): AdapterSettings {
       typeof obj.alwaysShowLabels === 'boolean'
         ? obj.alwaysShowLabels
         : DEFAULT_ADAPTER_SETTINGS.alwaysShowLabels,
+    cleanerAgentLabels:
+      typeof obj.cleanerAgentLabels === 'boolean'
+        ? obj.cleanerAgentLabels
+        : DEFAULT_ADAPTER_SETTINGS.cleanerAgentLabels,
     ghostHeadlessAgents:
       typeof obj.ghostHeadlessAgents === 'boolean'
         ? obj.ghostHeadlessAgents
