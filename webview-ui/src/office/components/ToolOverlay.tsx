@@ -327,6 +327,7 @@ export function ToolOverlay({
                         title="Change agent character"
                         aria-label="Change agent character"
                         data-testid="agent-appearance-gear"
+                        className="shrink-0 overflow-hidden border-0 text-[16px] leading-none"
                         onClick={(e) => {
                           e.stopPropagation();
                           onAgentAppearance(id);
