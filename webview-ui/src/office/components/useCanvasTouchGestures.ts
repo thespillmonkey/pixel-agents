@@ -1,7 +1,7 @@
 import type { RefObject } from 'react';
 import { useEffect, useRef } from 'react';
 
-import { TOUCH_TAP_MAX_DURATION_MS, ZOOM_MAX, ZOOM_MIN } from '../../constants.js';
+import { TOUCH_TAP_MAX_DURATION_MS, ZOOM_MAX, ZOOM_MIN, ZOOM_STEP } from '../../constants.js';
 import { unlockAudio } from '../../notificationSound.js';
 import { withinTapSlop } from '../../touch/touchPrimitives.js';
 
@@ -116,8 +116,8 @@ export function useCanvasTouchGestures(options: CanvasTouchOptions): void {
       if (mode === 'pinch' && e.touches.length >= 2) {
         const { zoom, onZoomChange } = latest.current;
         const proposed = Math.round(
-          pinchStartZoom * (distance(e.touches[0], e.touches[1]) / pinchStartDist),
-        );
+          (pinchStartZoom * (distance(e.touches[0], e.touches[1]) / pinchStartDist)) / ZOOM_STEP,
+        ) * ZOOM_STEP;
         const next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, proposed));
         if (next !== zoom) onZoomChange(next);
         // Two-finger drag also pans, tracked from the midpoint.

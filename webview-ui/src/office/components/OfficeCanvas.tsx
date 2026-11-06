@@ -8,6 +8,7 @@ import {
   ZOOM_MAX,
   ZOOM_MIN,
   ZOOM_SCROLL_THRESHOLD,
+  ZOOM_STEP,
 } from '../../constants.js';
 import { unlockAudio } from '../../notificationSound.js';
 import { transport } from '../../transport/index.js';
@@ -758,7 +759,7 @@ export function OfficeCanvas({
         // Accumulate scroll delta, step zoom when threshold crossed
         zoomAccumulatorRef.current += e.deltaY;
         if (Math.abs(zoomAccumulatorRef.current) >= ZOOM_SCROLL_THRESHOLD) {
-          const delta = zoomAccumulatorRef.current < 0 ? 1 : -1;
+          const delta = zoomAccumulatorRef.current < 0 ? ZOOM_STEP : -ZOOM_STEP;
           zoomAccumulatorRef.current = 0;
           const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, zoom + delta));
           if (newZoom !== zoom) {
