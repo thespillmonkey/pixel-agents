@@ -59,6 +59,8 @@ export interface UserDirectory {
 }
 
 export interface PixelAgentsConfig {
+  /** Fixed sprite content identity, keyed by exact persistent agent name. Missing means random. */
+  agentAppearances: Record<string, string>;
   vscode: AdapterSettings;
   standalone: AdapterSettings;
   externalAssetDirectories: string[];
@@ -207,8 +209,22 @@ function parseAdapterSettings(raw: unknown): AdapterSettings {
   };
 }
 
+export function parseAgentAppearances(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw).filter(
+      ([name, id]) =>
+        name.length > 0 &&
+        name.length <= 512 &&
+        typeof id === 'string' &&
+        /^(sha256:[a-f0-9]{64}|builtin:\d+)$/.test(id),
+    ),
+  );
+}
+
 function emptyConfig(): PixelAgentsConfig {
   return {
+    agentAppearances: {},
     vscode: { ...DEFAULT_ADAPTER_SETTINGS },
     standalone: { ...DEFAULT_ADAPTER_SETTINGS },
     externalAssetDirectories: [],
@@ -227,6 +243,7 @@ export function readConfig(): PixelAgentsConfig {
     const raw = fs.readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<PixelAgentsConfig>;
     return {
+      agentAppearances: parseAgentAppearances(parsed.agentAppearances),
       vscode: parseAdapterSettings(parsed.vscode),
       standalone: parseAdapterSettings(parsed.standalone),
       externalAssetDirectories: Array.isArray(parsed.externalAssetDirectories)

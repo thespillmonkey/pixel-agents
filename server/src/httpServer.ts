@@ -4,6 +4,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 
+import { applyAgentAppearance } from './agentAppearance.js';
 import type { AgentRuntime } from './agentRuntime.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import type {
@@ -79,6 +80,10 @@ const startTime = Date.now();
  * framework-agnostic. If Fastify is ever replaced, only this file changes.
  */
 export async function createHttpServer(options: HttpServerOptions): Promise<HttpServerHandle> {
+  if (options.store)
+    options.store.appearanceResolver = (agent) => {
+      applyAgentAppearance(agent, options.assetCache?.characters, options.store);
+    };
   const app = Fastify({
     // Standalone logs every request. The privilege token rides `/ws?token=`
     // and `/terminal/:id?token=` handshakes, so the url is redacted before it

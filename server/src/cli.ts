@@ -10,6 +10,7 @@
 
 import * as path from 'path';
 
+import { applyAgentAppearance } from './agentAppearance.js';
 import { AgentRuntime } from './agentRuntime.js';
 import { AgentStateStore } from './agentStateStore.js';
 import {
@@ -258,6 +259,9 @@ async function main(): Promise<void> {
   const store = new AgentStateStore();
   const adapter = new FileStateAdapter({ namespace: 'standalone' });
   store.setAdapter(adapter);
+  store.appearanceResolver = (agent) => {
+    applyAgentAppearance(agent, assetCache.characters, store);
+  };
 
   // ── Create server ──
   const server = new PixelAgentsServer();

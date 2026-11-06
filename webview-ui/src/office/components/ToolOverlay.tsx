@@ -48,6 +48,7 @@ interface ToolOverlayProps {
   zoom: number;
   panRef: React.RefObject<{ x: number; y: number }>;
   onCloseAgent: (id: number) => void;
+  onAgentAppearance?: (id: number) => void;
   alwaysShowOverlay: boolean;
   cleanerAgentLabels: boolean;
 }
@@ -90,6 +91,7 @@ export function ToolOverlay({
   zoom,
   panRef,
   onCloseAgent,
+  onAgentAppearance,
   alwaysShowOverlay,
   cleanerAgentLabels,
 }: ToolOverlayProps) {
@@ -305,18 +307,35 @@ export function ToolOverlay({
                   )}
                 </div>
                 {isSelected && !isSub && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onCloseAgent(id);
-                    }}
-                    title="Close agent"
-                    className="ml-2 shrink-0 leading-none"
-                  >
-                    ×
-                  </Button>
+                  <div className="ml-2 flex flex-col items-center shrink-0">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCloseAgent(id);
+                      }}
+                      title="Close agent"
+                      className="shrink-0 leading-none"
+                    >
+                      ×
+                    </Button>
+                    {onAgentAppearance && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="Change agent character"
+                        aria-label="Change agent character"
+                        data-testid="agent-appearance-gear"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onAgentAppearance(id);
+                        }}
+                      >
+                        ⚙
+                      </Button>
+                    )}
+                  </div>
                 )}
               </div>
               {showContextGauge && (

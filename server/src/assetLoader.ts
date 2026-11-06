@@ -5,12 +5,13 @@
  * and loads all PNG files into SpriteData format for use in the webview.
  */
 
+import { createHash } from 'node:crypto';
+
 import * as fs from 'fs';
 import * as path from 'path';
 import type * as vscode from 'vscode';
 
 import {
-  CHAR_COUNT,
   CHAR_FRAMES_PER_ROW,
   MAX_PET_PNG_SIZE,
   WALL_BITMASK_COUNT,
@@ -471,13 +472,18 @@ export function sendFloorTilesToWebview(
 export interface LoadedCharacterSprites {
   /** Pre-colored characters, each with 7 frames per direction */
   characters: CharacterDirectionSprites[];
+  /** Content identities survive inventory reordering and external-directory moves. */
+  characterIds?: string[];
 }
 
 export function mergeCharacterSprites(
   a: LoadedCharacterSprites,
   b: LoadedCharacterSprites,
 ): LoadedCharacterSprites {
-  return { characters: [...a.characters, ...b.characters] };
+  return {
+    characters: [...a.characters, ...b.characters],
+    characterIds: [...(a.characterIds ?? []), ...(b.characterIds ?? [])],
+  };
 }
 
 /**
@@ -490,22 +496,30 @@ export async function loadCharacterSprites(
   try {
     const charDir = path.join(assetsRoot, 'assets', 'characters');
     const characters: CharacterDirectionSprites[] = [];
+    const characterIds: string[] = [];
 
-    for (let ci = 0; ci < CHAR_COUNT; ci++) {
-      const filePath = path.join(charDir, `char_${ci}.png`);
-      if (!fs.existsSync(filePath)) {
-        console.log(`[AssetLoader] No character sprite found at: ${filePath}`);
-        return null;
+    const filenames = fs
+      .readdirSync(charDir)
+      .filter((name) => /^char_\d+\.png$/i.test(name))
+      .sort((a, b) => Number(a.match(/\d+/)![0]) - Number(b.match(/\d+/)![0]));
+    if (!filenames.length) return null;
+    for (const filename of filenames) {
+      const filePath = path.join(charDir, filename);
+      try {
+        const pngBuffer = fs.readFileSync(filePath);
+        characters.push(decodeCharacterPng(pngBuffer));
+        characterIds.push('sha256:' + createHash('sha256').update(pngBuffer).digest('hex'));
+      } catch (err) {
+        console.warn(
+          `[AssetLoader] Skipping invalid character ${filename}: ${err instanceof Error ? err.message : err}`,
+        );
       }
-
-      const pngBuffer = fs.readFileSync(filePath);
-      characters.push(decodeCharacterPng(pngBuffer));
     }
 
     console.log(
       `[AssetLoader] ✅ Loaded ${characters.length} character sprites (${CHAR_FRAMES_PER_ROW} frames × 3 directions each)`,
     );
-    return { characters };
+    return characters.length ? { characters, characterIds } : null;
   } catch (err) {
     console.error(
       `[AssetLoader] ❌ Error loading character sprites: ${err instanceof Error ? err.message : err}`,
@@ -544,6 +558,7 @@ export async function loadExternalCharacterSprites(
     charFiles.sort((a, b) => a.index - b.index);
 
     const characters: CharacterDirectionSprites[] = [];
+    const characterIds: string[] = [];
     for (const { filename } of charFiles) {
       const filePath = path.join(charDir, filename);
       const resolvedFile = path.resolve(filePath);
@@ -555,6 +570,7 @@ export async function loadExternalCharacterSprites(
       try {
         const pngBuffer = fs.readFileSync(filePath);
         characters.push(decodeCharacterPng(pngBuffer));
+        characterIds.push('sha256:' + createHash('sha256').update(pngBuffer).digest('hex'));
       } catch (err) {
         console.warn(
           `  [AssetLoader] ⚠️  Error loading character ${filename}: ${err instanceof Error ? err.message : err}`,
@@ -569,7 +585,7 @@ export async function loadExternalCharacterSprites(
     console.log(
       `[AssetLoader] ✅ Loaded ${characters.length} external character sprites from ${externalRoot}`,
     );
-    return { characters };
+    return characters.length ? { characters, characterIds } : null;
   } catch (err) {
     console.error(
       `[AssetLoader] ❌ Error loading external character sprites: ${err instanceof Error ? err.message : err}`,

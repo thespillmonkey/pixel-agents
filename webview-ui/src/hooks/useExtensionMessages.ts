@@ -689,6 +689,14 @@ export function useExtensionMessages(
         setSubagentCharacters((prev) =>
           prev.filter((s) => !(s.parentAgentId === id && s.parentToolId === parentToolId)),
         );
+      } else if (msg.type === 'agentAppearanceChanged') {
+        const ch = os.characters.get(msg.id);
+        if (ch) {
+          ch.palette = msg.palette;
+          ch.hueShift = msg.hueShift;
+          // Canvas is imperative, but drawer/card portraits also need a React refresh.
+          setAgents((current) => [...current]);
+        }
       } else if (msg.type === 'characterSpritesLoaded') {
         const characters = msg.characters as Array<{
           down: string[][][];

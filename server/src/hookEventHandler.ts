@@ -229,6 +229,13 @@ export class HookEventHandler {
               .slice(0, 120);
             if (name && name !== agent.agentName) {
               agent.agentName = name;
+              this.agents.appearanceResolver?.(agent);
+              this.agents.broadcast({
+                type: 'agentAppearanceChanged',
+                id: agent.id,
+                palette: agent.palette ?? 0,
+                hueShift: agent.hueShift ?? 0,
+              });
               this.agents.broadcast({ type: 'agentTeamInfo', id: agent.id, agentName: name });
               this.agents.persist();
             }

@@ -28,6 +28,10 @@ export type ServerMessage =
   | LayoutLoaded
   | FurnitureAssetsLoaded
   | CharacterSpritesLoaded
+  | AgentAppearanceOptions
+  | AgentAppearanceChanged
+  | AgentAppearanceSaved
+  | AgentAppearanceError
   | PetSpritesLoaded
   | FloorTilesLoaded
   | WallTilesLoaded
@@ -59,6 +63,8 @@ export type ClientMessage =
   | SetLastSeenVersion
   | SetAlwaysShowLabels
   | SetCleanerAgentLabels
+  | RequestAgentAppearance
+  | SaveAgentAppearance
   | SetGhostHeadlessAgents
   | SetHooksEnabled
   | HooksConsentResponse
@@ -248,6 +254,40 @@ export interface CharacterSpriteSet {
   right: string[][][];
 }
 
+export interface AgentAppearanceOptions {
+  type: 'agentAppearanceOptions';
+  id: number;
+  name: string;
+  selectedAssetId: string | null;
+  palette: number;
+  hueShift: number;
+  options: AgentAppearanceOption[];
+}
+
+export interface AgentAppearanceOption {
+  id: string;
+  label: string;
+  palette: number;
+}
+
+export interface AgentAppearanceChanged {
+  type: 'agentAppearanceChanged';
+  id: number;
+  palette: number;
+  hueShift: number;
+}
+
+export interface AgentAppearanceSaved {
+  type: 'agentAppearanceSaved';
+  id: number;
+}
+
+export interface AgentAppearanceError {
+  type: 'agentAppearanceError';
+  id: number;
+  message: string;
+}
+
 export interface PetSpritesLoaded {
   type: 'petSpritesLoaded';
   pets: PetSpriteFrameSet[];
@@ -431,6 +471,17 @@ export interface SetAlwaysShowLabels {
 export interface SetCleanerAgentLabels {
   type: 'setCleanerAgentLabels';
   enabled: boolean;
+}
+
+export interface RequestAgentAppearance {
+  type: 'requestAgentAppearance';
+  id: number;
+}
+
+export interface SaveAgentAppearance {
+  type: 'saveAgentAppearance';
+  id: number;
+  assetId: string | null;
 }
 
 export interface SetGhostHeadlessAgents {

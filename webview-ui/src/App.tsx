@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { toMajorMinor } from './changelogData.js';
+import { AgentAppearanceModal } from './components/AgentAppearanceModal.js';
 import { AgentCardBar } from './components/AgentCardBar.js';
 import { BottomToolbar } from './components/BottomToolbar.js';
 import { ChangelogModal } from './components/ChangelogModal.js';
@@ -132,6 +133,8 @@ function App() {
 
   const [isChangelogOpen, setIsChangelogOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [appearanceAgentId, setAppearanceAgentId] = useState<number | null>(null);
+  const closeAppearance = useCallback(() => setAppearanceAgentId(null), []);
   const [isHooksInfoOpen, setIsHooksInfoOpen] = useState(false);
   const [hooksTooltipDismissed, setHooksTooltipDismissed] = useState(false);
   const [isDebugMode, setIsDebugMode] = useState(false);
@@ -586,6 +589,9 @@ function App() {
             zoom={editor.zoom}
             panRef={editor.panRef}
             onCloseAgent={handleCloseAgent}
+            onAgentAppearance={
+              isBrowserRuntime && !officeReadOnly ? setAppearanceAgentId : undefined
+            }
             alwaysShowOverlay={alwaysShowOverlay}
             cleanerAgentLabels={cleanerAgentLabels}
           />
@@ -825,6 +831,13 @@ function App() {
         currentVersion={extensionVersion}
       />
 
+      {appearanceAgentId !== null && (
+        <AgentAppearanceModal
+          key={appearanceAgentId}
+          agentId={appearanceAgentId}
+          onClose={closeAppearance}
+        />
+      )}
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}

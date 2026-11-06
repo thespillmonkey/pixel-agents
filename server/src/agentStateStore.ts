@@ -48,6 +48,7 @@ export class AgentStateStore {
   readonly nextAgentId = { current: 1 };
   readonly nextTerminalIndex = { current: 1 };
   private adapter: StateAdapter | undefined;
+  appearanceResolver?: (agent: AgentState) => void;
 
   // ── Adapter ──────────────────────────────────────────────────
 
@@ -111,6 +112,7 @@ export class AgentStateStore {
   // ── Map-compatible write (emits events) ─────────────────────
 
   set(id: number, agent: AgentState): this {
+    this.appearanceResolver?.(agent);
     const isNew = !this.agents.has(id);
     this.agents.set(id, agent);
     if (isNew) {

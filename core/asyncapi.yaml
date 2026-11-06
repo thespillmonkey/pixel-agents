@@ -105,6 +105,10 @@ components:
         # Assets
         - $ref: '#/components/schemas/FurnitureAssetsLoaded'
         - $ref: '#/components/schemas/CharacterSpritesLoaded'
+        - $ref: '#/components/schemas/AgentAppearanceOptions'
+        - $ref: '#/components/schemas/AgentAppearanceChanged'
+        - $ref: '#/components/schemas/AgentAppearanceSaved'
+        - $ref: '#/components/schemas/AgentAppearanceError'
         - $ref: '#/components/schemas/PetSpritesLoaded'
         - $ref: '#/components/schemas/FloorTilesLoaded'
         - $ref: '#/components/schemas/WallTilesLoaded'
@@ -141,6 +145,8 @@ components:
         - $ref: '#/components/schemas/SetLastSeenVersion'
         - $ref: '#/components/schemas/SetAlwaysShowLabels'
         - $ref: '#/components/schemas/SetCleanerAgentLabels'
+        - $ref: '#/components/schemas/RequestAgentAppearance'
+        - $ref: '#/components/schemas/SaveAgentAppearance'
         - $ref: '#/components/schemas/SetGhostHeadlessAgents'
         - $ref: '#/components/schemas/SetHooksEnabled'
         - $ref: '#/components/schemas/HooksConsentResponse'
@@ -1480,3 +1486,66 @@ components:
           type: string
         frame:
           type: integer
+
+    RequestAgentAppearance:
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type: { const: requestAgentAppearance }
+        id: { type: integer }
+    SaveAgentAppearance:
+      type: object
+      additionalProperties: false
+      required: [type, id, assetId]
+      properties:
+        type: { const: saveAgentAppearance }
+        id: { type: integer }
+        assetId: { type: [string, 'null'] }
+    AgentAppearanceOptions:
+      type: object
+      additionalProperties: false
+      required: [type, id, name, selectedAssetId, options, palette, hueShift]
+      properties:
+        type: { const: agentAppearanceOptions }
+        id: { type: integer }
+        name: { type: string }
+        selectedAssetId: { type: [string, 'null'] }
+        palette: { type: integer }
+        hueShift: { type: integer }
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentAppearanceOption'
+    AgentAppearanceOption:
+      type: object
+      additionalProperties: false
+      required: [id, label, palette]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        palette: { type: integer }
+    AgentAppearanceChanged:
+      type: object
+      additionalProperties: false
+      required: [type, id, palette, hueShift]
+      properties:
+        type: { const: agentAppearanceChanged }
+        id: { type: integer }
+        palette: { type: integer }
+        hueShift: { type: integer }
+    AgentAppearanceSaved:
+      type: object
+      additionalProperties: false
+      required: [type, id]
+      properties:
+        type: { const: agentAppearanceSaved }
+        id: { type: integer }
+    AgentAppearanceError:
+      type: object
+      additionalProperties: false
+      required: [type, id, message]
+      properties:
+        type: { const: agentAppearanceError }
+        id: { type: integer }
+        message: { type: string }

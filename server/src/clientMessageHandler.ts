@@ -1,6 +1,12 @@
 import type { StateAdapter } from '../../core/src/adapter.js';
 import type { HookProvider } from '../../core/src/provider.js';
 import { resendAgentActivity } from './agentActivityResend.js';
+import {
+  appearanceInventory,
+  appearanceName,
+  applyAgentAppearance,
+  saveAgentAppearance,
+} from './agentAppearance.js';
 import { buildAgentDiagnostics } from './agentDiagnostics.js';
 import type { AgentRuntime } from './agentRuntime.js';
 import type { AgentStateStore } from './agentStateStore.js';
@@ -130,6 +136,9 @@ export function handleClientMessage(
 ): void {
   const { store, runtime, cache } = ctx;
   const adapter = store.getAdapter();
+  store.appearanceResolver = (agent) => {
+    applyAgentAppearance(agent, cache?.characters, store);
+  };
 
   // Tokenless is read-only. Refused HERE, once, rather than per message, so a
   // message type added later is privileged by default instead of open until
@@ -143,6 +152,63 @@ export function handleClientMessage(
     case 'webviewReady':
       handleWebviewReady(send, ctx);
       break;
+
+    case 'requestAgentAppearance': {
+      const agent = typeof msg.id === 'number' ? store.get(msg.id) : undefined;
+      if (!agent) {
+        send({
+          type: 'agentAppearanceError',
+          id: msg.id,
+          message: 'This agent is no longer available.',
+        });
+        break;
+      }
+      const reply = () =>
+        send({
+          type: 'agentAppearanceOptions',
+          id: agent.id,
+          name: appearanceName(agent),
+          selectedAssetId:
+            Object.entries(readConfig().agentAppearances).find(
+              ([name]) => name === appearanceName(agent),
+            )?.[1] ?? null,
+          options: appearanceInventory(cache?.characters),
+          palette: agent.palette ?? 0,
+          hueShift: agent.hueShift ?? 0,
+        });
+      // Re-scan on EACH open; publish refreshed templates to all browsers before options.
+      Promise.resolve(ctx.onReloadAssets?.((message) => store.broadcast(message)))
+        .then(() => {
+          for (const current of store.values()) {
+            applyAgentAppearance(current, cache?.characters, store);
+            store.broadcast({
+              type: 'agentAppearanceChanged',
+              id: current.id,
+              palette: current.palette,
+              hueShift: current.hueShift ?? 0,
+            });
+          }
+          reply();
+        })
+        .catch(() =>
+          send({
+            type: 'agentAppearanceError',
+            id: agent.id,
+            message: 'Could not refresh available characters. Try again.',
+          }),
+        );
+      break;
+    }
+
+    case 'saveAgentAppearance': {
+      const error = saveAgentAppearance(store, cache?.characters, msg.id, msg.assetId);
+      send(
+        error
+          ? { type: 'agentAppearanceError', id: msg.id, message: error }
+          : { type: 'agentAppearanceSaved', id: msg.id },
+      );
+      break;
+    }
 
     case 'launchAgent': {
       // Standalone can launch: the agent runs in a server-side PTY streamed to
@@ -229,6 +295,8 @@ export function handleClientMessage(
             }
           }
         }
+        // Seat snapshots from another browser must never undo a name-bound appearance.
+        for (const agent of store.values()) applyAgentAppearance(agent, cache?.characters, store);
         adapter?.saveSeats(seats);
       }
       break;
@@ -610,6 +678,7 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
   const persistedSeats = adapter?.loadSeats() ?? {};
   const agentMeta: Record<number, { palette?: number; hueShift?: number; seatId?: string }> = {};
   for (const [id, agent] of store) {
+    applyAgentAppearance(agent, cache?.characters, store);
     agentIds.push(id);
     if (agent.directoryName) {
       directoryNames[id] = agent.directoryName;
@@ -706,6 +775,10 @@ function refuseReadOnly(
     );
   }
   switch (msg.type) {
+    case 'requestAgentAppearance':
+    case 'saveAgentAppearance':
+      send({ type: 'agentAppearanceError', id: msg.id, message: 'This office is read-only.' });
+      return;
     case 'setHooksEnabled': {
       const provider = hookProviderById(msg.providerId);
       if (!provider) return;
