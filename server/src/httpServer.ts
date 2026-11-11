@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import Fastify from 'fastify';
 
 import { applyAgentAppearance } from './agentAppearance.js';
+import { agentCreatedMessage } from './agentMessages.js';
 import type { AgentRuntime } from './agentRuntime.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import type {
@@ -16,12 +17,20 @@ import { handleClientMessage } from './clientMessageHandler.js';
 import {
   HOOK_API_PREFIX,
   MAX_HOOK_BODY_SIZE,
+  USAGE_API_PREFIX,
   WS_CLOSE_FORBIDDEN_ORIGIN,
   WS_CLOSE_UNAUTHORIZED,
 } from './constants.js';
-import type { PtySessionManager } from './terminal/ptySessionManager.js';
+import { applyReportedContext } from './contextUsage.js';
+import { hookProviderById } from './providers/index.js';
 import { registerTerminalRoutes } from './terminal/terminalRoutes.js';
+import type { TerminalSessions } from './terminal/terminalSessions.js';
 import type { AgentState } from './types.js';
+import {
+  PRIVILEGED_BROADCAST_TYPES,
+  recordUsageReport,
+  usageLimitsMessage,
+} from './usageLimits.js';
 import {
   bearerTokenValid,
   isAllowedWebSocketOrigin,
@@ -58,7 +67,10 @@ export interface HttpServerOptions {
   onReloadAssets?: ReloadAssetsSideEffect;
   /** PTY terminals for standalone-launched agents. Absent = terminal feature off
    *  (VS Code embedded mode, where the editor owns terminals). */
-  ptyManager?: PtySessionManager;
+  ptyManager?: TerminalSessions;
+  /** The package root holding dist/hooks/ (standalone), from which the Usage
+   *  Bars toggle installs the status line bridge script. */
+  packageRoot?: string;
   /** Extra Host names (beyond loopback and a specific bind address) a
    *  privileged standalone handshake may arrive under -- e.g. a reverse proxy's
    *  public name. See wsAuth.privilegedHostnames. */
@@ -115,6 +127,7 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
 
   registerHealthRoute(app);
   registerHookRoute(app, options);
+  registerUsageRoute(app, options);
   registerWebSocketRoute(app, options, allowedHostnames);
   registerTerminalRoutes(app, {
     token: options.token,
@@ -186,6 +199,38 @@ function hookBearerAuth(adminToken: string, relayToken: string) {
   };
 }
 
+// ── Usage reports ──────────────────────────────────────────────
+
+/** A provider's usage bridge reports the account's plan limits here. Stored,
+ *  and passed on to the office when they moved (recordUsageReport). */
+function registerUsageRoute(app: FastifyInstance, options: HttpServerOptions): void {
+  app.post<{ Params: { providerId: string }; Body: unknown }>(
+    `${USAGE_API_PREFIX}/:providerId`,
+    {
+      preHandler: async (request, reply) => {
+        if (!bearerTokenValid(request.headers.authorization, options.token))
+          return reply.code(401).send({ error: 'Unauthorized' });
+      },
+      schema: {
+        params: {
+          type: 'object',
+          properties: { providerId: { type: 'string', pattern: '^[a-z0-9-]+$' } },
+          required: ['providerId'],
+        },
+      },
+    },
+    async (request, reply) => {
+      const provider = hookProviderById(request.params.providerId);
+      if (provider && recordUsageReport(provider, request.body)) {
+        options.store.broadcast({ ...usageLimitsMessage(provider.id) });
+      }
+      const context = provider?.usageBridge?.normalizeContext(request.body);
+      if (context) applyReportedContext(options.store, context);
+      reply.send('ok');
+    },
+  );
+}
+
 // ── WebSocket ──────────────────────────────────────────────────
 
 function registerWebSocketRoute(
@@ -239,19 +284,7 @@ function registerWebSocketRoute(
 
     // Pipe store events to WebSocket client
     const onAgentAdded = (id: number, agent: AgentState) => {
-      safeSend(socket, {
-        type: 'agentCreated',
-        id,
-        directoryName: agent.directoryName,
-        isExternal: agent.isExternal || undefined,
-        isTeammate: agent.leadAgentId !== undefined || undefined,
-        teammateName: agent.agentName,
-        parentAgentId: agent.leadAgentId,
-        teamName: agent.teamName,
-        hooksOnly: agent.hooksOnly || undefined,
-        palette: agent.palette,
-        hueShift: agent.hueShift,
-      });
+      safeSend(socket, agentCreatedMessage(id, agent));
     };
 
     const onAgentRemoved = (id: number) => {
@@ -259,6 +292,8 @@ function registerWebSocketRoute(
     };
 
     const onBroadcast = (message: Record<string, unknown>) => {
+      // The operator's account usage is not for read-only viewers.
+      if (!privileged && PRIVILEGED_BROADCAST_TYPES.has(String(message.type))) return;
       safeSend(socket, message);
     };
 
@@ -279,6 +314,7 @@ function registerWebSocketRoute(
           cache: options.assetCache ?? null,
           onSetHooksEnabled: options.onSetHooksEnabled,
           onReloadAssets: options.onReloadAssets,
+          packageRoot: options.packageRoot,
           privileged,
           ptyManager: options.ptyManager,
         });

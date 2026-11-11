@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   publish:
+    if: github.repository == 'pixel-agents-hq/pixel-agents'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     permissions:
@@ -87,6 +88,7 @@ jobs:
           files: ${{ steps.package-vsix.outputs.vsixPath }}
 
   publish-npm:
+    if: github.repository == 'pixel-agents-hq/pixel-agents'
     name: Verify and Publish npm Package
     runs-on: ubuntu-latest
     timeout-minutes: 20

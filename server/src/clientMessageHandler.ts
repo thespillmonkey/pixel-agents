@@ -1,4 +1,5 @@
 import type { StateAdapter } from '../../core/src/adapter.js';
+import { rosterPick } from '../../core/src/paletteUtils.js';
 import type { HookProvider } from '../../core/src/provider.js';
 import { resendAgentActivity } from './agentActivityResend.js';
 import {
@@ -11,6 +12,12 @@ import { buildAgentDiagnostics } from './agentDiagnostics.js';
 import type { AgentRuntime } from './agentRuntime.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import type { LoadedAssets, LoadedCharacterSprites, LoadedPetSprites } from './assetLoader.js';
+import { cardOrderMessage, saveCardOrder } from './cardOrder.js';
+import {
+  characterProfilesLoadedMessage,
+  handleCharacterProfilesClientMessage,
+  refusedSaveAnswer,
+} from './characterProfilesPersistence.js';
 import {
   getHooksConsent,
   getHooksEnabled,
@@ -18,7 +25,16 @@ import {
   setHooksEnabled,
   writeConfig,
 } from './configPersistence.js';
-import { HUE_SHIFT_MAX_DEG, PALETTE_COUNT, TERMINAL_REQUIRES_TOKEN_REASON } from './constants.js';
+import { MAX_CHARACTER_REPEAT, TERMINAL_REQUIRES_TOKEN_REASON } from './constants.js';
+import {
+  conversationLimitsFrom,
+  conversationQueryFrom,
+  listConversations,
+  liveSessions,
+  recordConversationLooks,
+  resumeRequest,
+  searchConversations,
+} from './conversations.js';
 import {
   handleDirectoryClientMessage,
   type HostDirectoryEntry,
@@ -27,6 +43,7 @@ import {
 import { collectDirectorySuggestions } from './directorySuggestions.js';
 import { hostDirectory } from './hostDirectory.js';
 import { readLayoutFromFile, writeLayoutToFile } from './layoutPersistence.js';
+import { getPaletteCount } from './paletteAssigner.js';
 import type { ConsentEffects } from './providers/hook/consentExecutor.js';
 import { applyConsentChoice } from './providers/hook/consentExecutor.js';
 import { hooksConsentRequest } from './providers/hook/consentGate.js';
@@ -36,8 +53,10 @@ import {
   hookProviderCapabilities,
   hookProviders,
 } from './providers/index.js';
-import type { PtySessionManager } from './terminal/ptySessionManager.js';
+import { recentCharactersMessage, recordCharacterUse } from './recentCharacters.js';
 import { launchStandaloneAgent } from './terminal/standaloneAgentLauncher.js';
+import type { TerminalSessions } from './terminal/terminalSessions.js';
+import { applyUsageBridgeChoice, usageSnapshotMessages } from './usageLimits.js';
 
 type WsSend = (message: Record<string, unknown>) => void;
 
@@ -56,7 +75,7 @@ export type ReloadAssetsSideEffect = (send: WsSend) => Promise<void> | void;
 
 /** Cached assets loaded at server startup. Sent to each WebSocket client on webviewReady. */
 export interface AssetCache {
-  characters: LoadedCharacterSprites | null;
+  characters: LoadedCharacterSprites;
   pets: LoadedPetSprites | null;
   floorTiles: string[][][] | null;
   wallTiles: string[][][][] | null;
@@ -82,9 +101,12 @@ export interface ClientMessageContext {
    * it gets the safe answer.
    */
   privileged?: boolean;
+  /** The package root holding dist/hooks/, from which the Usage Bars toggle
+   *  installs the status line bridge. Absent = this host cannot install it. */
+  packageRoot?: string;
   /** PTY terminals for standalone-launched agents. Absent in VS Code embedded
    *  mode, where the editor owns terminal lifecycle. */
-  ptyManager?: PtySessionManager;
+  ptyManager?: TerminalSessions;
 }
 
 // ── Setting key constants (mirror adapters/vscode/constants.ts) ──
@@ -92,12 +114,19 @@ const KEY_SOUND_ENABLED = 'pixel-agents.soundEnabled';
 const KEY_LAST_SEEN_VERSION = 'pixel-agents.lastSeenVersion';
 const KEY_ALWAYS_SHOW_LABELS = 'pixel-agents.alwaysShowLabels';
 const KEY_CLEANER_AGENT_LABELS = 'pixel-agents.cleanerAgentLabels';
+const KEY_LABELS_ONLY_ON_WORK = 'pixel-agents.labelsOnlyOnWork';
 const KEY_GHOST_HEADLESS_AGENTS = 'pixel-agents.ghostHeadlessAgents';
 const KEY_WATCH_ALL_SESSIONS = 'pixel-agents.watchAllSessions';
 const KEY_HOOKS_INFO_SHOWN = 'pixel-agents.hooksInfoShown';
 const KEY_SHOW_AREAS = 'pixel-agents.showAreas';
 const KEY_BYPASS_PERMISSIONS = 'pixel-agents.bypassPermissions';
 const KEY_SHOW_HOST_DIRECTORIES = 'pixel-agents.showHostDirectories';
+
+/** The provider whose conversations the sidebar lists and resumes: the first
+ *  that names them and can launch (HookProvider.conversationTitle). */
+const conversationProvider = hookProviders.find(
+  (provider) => provider.conversationTitle && provider.buildLaunchCommand,
+);
 
 /**
  * This host's own Directory contribution: the directory the server was started
@@ -120,6 +149,14 @@ function shownHostDirectoriesFor(ctx: ClientMessageContext): HostDirectoryEntry[
   return ctx.store.getAdapter()?.getSetting(KEY_SHOW_HOST_DIRECTORIES, false)
     ? hostDirectoriesFor(ctx)
     : [];
+}
+
+/** The drawer's Directories as this client is sent them (shown host entries + the user's). */
+function directoriesMessage(ctx: ClientMessageContext) {
+  return {
+    type: 'directoriesLoaded',
+    directories: listDirectories(shownHostDirectoriesFor(ctx)),
+  } as const;
 }
 
 /**
@@ -174,7 +211,7 @@ export function handleClientMessage(
             )?.[1] ?? null,
           options: appearanceInventory(cache?.characters),
           palette: agent.palette ?? 0,
-          hueShift: agent.hueShift ?? 0,
+          repeat: agent.repeat ?? 0,
         });
       // Re-scan on EACH open; publish refreshed templates to all browsers before options.
       Promise.resolve(ctx.onReloadAssets?.((message) => store.broadcast(message)))
@@ -185,7 +222,7 @@ export function handleClientMessage(
               type: 'agentAppearanceChanged',
               id: current.id,
               palette: current.palette,
-              hueShift: current.hueShift ?? 0,
+              repeat: current.repeat ?? 0,
             });
           }
           reply();
@@ -219,11 +256,69 @@ export function handleClientMessage(
       // field: the client sends only where to launch. Every launch comes from a
       // drawer row and carries its Directory's path; no directoryPath falls
       // back to the server cwd (launchStandaloneAgent's own default).
-      launchStandaloneAgent(
+      const picked = rosterPick(msg.palette, getPaletteCount());
+      const launched = launchStandaloneAgent(
         { store, runtime, ptyManager: ctx.ptyManager, provider: claudeProvider },
         {
           directoryPath: msg.directoryPath as string | undefined,
           bypassPermissions: adapter?.getSetting(KEY_BYPASS_PERMISSIONS, false) ?? false,
+          palette: picked,
+        },
+      );
+      // A roster pick moves to the front of every office's roster, once an
+      // agent wears it: a launch that failed (no PTY, no command) records nothing.
+      if (launched === null) break;
+      const recent = recordCharacterUse(picked);
+      if (recent) store.broadcast(recent);
+      break;
+    }
+
+    case 'requestConversations': {
+      if (!ctx.ptyManager || !conversationProvider) break;
+      send({
+        type: 'conversationsLoaded',
+        directories: listConversations(
+          listDirectories(shownHostDirectoriesFor(ctx)),
+          conversationProvider,
+          liveSessions(store),
+          conversationLimitsFrom(msg.limits),
+        ),
+      });
+      break;
+    }
+
+    case 'searchConversations': {
+      if (!ctx.ptyManager || !conversationProvider) break;
+      const query = conversationQueryFrom(msg);
+      if (!query) break;
+      send({
+        type: 'conversationSearchResults',
+        ...query,
+        ...searchConversations(
+          listDirectories(shownHostDirectoriesFor(ctx)),
+          conversationProvider,
+          liveSessions(store),
+          query,
+        ),
+      });
+      break;
+    }
+
+    case 'resumeConversation': {
+      if (!runtime || !ctx.ptyManager || !conversationProvider) break;
+      const resume = resumeRequest(store, conversationProvider, msg);
+      if (!resume) break;
+      launchStandaloneAgent(
+        { store, runtime, ptyManager: ctx.ptyManager, provider: conversationProvider },
+        {
+          directoryPath: resume.directoryPath,
+          bypassPermissions: adapter?.getSetting(KEY_BYPASS_PERMISSIONS, false) ?? false,
+          palette: resume.look?.palette,
+          resume: {
+            sessionId: resume.sessionId,
+            transcript: resume.transcript,
+            seatId: resume.look?.seatId,
+          },
         },
       );
       break;
@@ -255,28 +350,45 @@ export function handleClientMessage(
 
     case 'saveLayout':
       if (msg.layout) {
-        writeLayoutToFile(msg.layout as Record<string, unknown>);
+        // A /ws client's save: the VS Code panel learns of it through its layout
+        // watcher (the standalone server has none), so don't silence it.
+        writeLayoutToFile(msg.layout as Record<string, unknown>, { reportToWatchers: true });
       }
+      break;
+
+    case 'saveCharacterProfiles':
+      // Shared with the VS Code adapter. A save that lands is broadcast to every office
+      // (each draws agents from the profiles); a refused one is answered to this client.
+      handleCharacterProfilesClientMessage(msg, {
+        broadcast: (message) => store.broadcast(message),
+        reply: send,
+        store,
+        sharedRefsChanged: () => {
+          store.broadcast(directoriesMessage(ctx));
+          store.broadcast(recentCharactersMessage());
+        },
+      });
       break;
 
     case 'saveAgentSeats':
       if (msg.seats) {
         const seats = msg.seats as Record<
           string,
-          { palette?: number; hueShift?: number; seatId?: string }
+          { palette?: number; repeat?: number; seatId?: string }
         >;
-        // Sync palette/hueShift back to AgentState so existingAgents stays
-        // consistent across reconnects. Validate ranges to keep a remote
-        // client (or a hand-edited payload) from corrupting the stored
-        // values with out-of-range inputs that would render as a glitch.
-        // Palette ceiling is dynamic: external asset directories can add
-        // char_N.png beyond the bundled 6, so read the count from the asset
-        // cache instead of hardcoding PALETTE_COUNT.
-        const paletteCount = cache?.characters?.characters.length ?? PALETTE_COUNT;
+        // The server owns an agent's look: it picks one when the agent is
+        // created (random pick, roster or Directory pick, a teammate inherits its lead's).
+        // A seat save only fills in a look the agent doesn't have yet — a
+        // reconnecting browser saves back the looks it had before, and those
+        // must not overwrite the server's. Validate ranges to keep a remote
+        // client (or a hand-edited payload) from storing out-of-range values
+        // that would render as a glitch. Palette ceiling is dynamic: the
+        // character profiles plus any char_N.png from external asset dirs.
+        const paletteCount = getPaletteCount();
         for (const [idStr, meta] of Object.entries(seats)) {
           const id = Number(idStr);
           const agent = store.get(id);
-          if (agent) {
+          if (agent && agent.palette === undefined) {
             if (
               meta.palette !== undefined &&
               Number.isInteger(meta.palette) &&
@@ -286,18 +398,20 @@ export function handleClientMessage(
               agent.palette = meta.palette;
             }
             if (
-              meta.hueShift !== undefined &&
-              Number.isInteger(meta.hueShift) &&
-              meta.hueShift >= 0 &&
-              meta.hueShift <= HUE_SHIFT_MAX_DEG
+              meta.repeat !== undefined &&
+              Number.isInteger(meta.repeat) &&
+              meta.repeat >= 0 &&
+              meta.repeat <= MAX_CHARACTER_REPEAT
             ) {
-              agent.hueShift = meta.hueShift;
+              agent.repeat = meta.repeat;
             }
           }
         }
         // Seat snapshots from another browser must never undo a name-bound appearance.
         for (const agent of store.values()) applyAgentAppearance(agent, cache?.characters, store);
         adapter?.saveSeats(seats);
+        // Kept per session, so a resumed conversation comes back as it was.
+        recordConversationLooks(store, seats);
       }
       break;
 
@@ -315,6 +429,9 @@ export function handleClientMessage(
 
     case 'setCleanerAgentLabels':
       adapter?.setSetting(KEY_CLEANER_AGENT_LABELS, msg.enabled);
+      break;
+    case 'setLabelsOnlyOnWork':
+      adapter?.setSetting(KEY_LABELS_ONLY_ON_WORK, msg.enabled);
       break;
 
     case 'setGhostHeadlessAgents':
@@ -335,6 +452,18 @@ export function handleClientMessage(
       const provider = hookProviderById(msg.providerId);
       if (!provider) break;
       void applyHooksPreference(ctx, send, provider, enabled);
+      break;
+    }
+
+    case 'setUsageBridgeEnabled': {
+      // Usage Bars: install (the confirmed disclosure is the consent) or
+      // restore the user's status line. Every office hears the outcome.
+      const provider = hookProviderById(msg.providerId);
+      if (!provider?.usageBridge || typeof msg.enabled !== 'boolean') break;
+      void applyUsageBridgeChoice(provider, ctx.packageRoot, msg.enabled).then((status) => {
+        if (status.error) send({ ...status });
+        else store.broadcast({ ...status });
+      });
       break;
     }
 
@@ -379,6 +508,13 @@ export function handleClientMessage(
       break;
     }
 
+    case 'saveCardOrder': {
+      const loaded = saveCardOrder(adapter, msg.order, (id) => store.has(id));
+      // Every open office follows the reorder, the sender's included.
+      if (loaded) store.broadcast(loaded);
+      break;
+    }
+
     case 'saveAreaMappings': {
       const rawMappings = msg.mappings;
       if (!rawMappings || typeof rawMappings !== 'object') {
@@ -414,10 +550,7 @@ export function handleClientMessage(
       adapter.setSetting(KEY_SHOW_HOST_DIRECTORIES, msg.enabled);
       // The list is what changed, so every office gets it again -- the same
       // signal a Directory mutation sends.
-      store.broadcast({
-        type: 'directoriesLoaded',
-        directories: listDirectories(shownHostDirectoriesFor(ctx)),
-      });
+      store.broadcast(directoriesMessage(ctx));
       break;
     }
 
@@ -557,11 +690,12 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
     });
   }
 
-  // 2. Assets (from server cache, loaded at startup via pngjs)
+  // 2. Character profiles (the cast agents are drawn from), then the assets
+  //    (from server cache, loaded at startup via pngjs)
+  send(characterProfilesLoadedMessage());
+  send(recentCharactersMessage());
   if (cache) {
-    if (cache.characters) {
-      send({ type: 'characterSpritesLoaded', characters: cache.characters.characters });
-    }
+    send({ type: 'characterSpritesLoaded', characters: cache.characters.characters });
     if (cache.pets) {
       send({
         type: 'petSpritesLoaded',
@@ -641,6 +775,11 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
       });
   }
 
+  // 4a-ter. Usage bars: the operator's account usage, privileged clients only.
+  if (ctx.privileged) {
+    for (const message of usageSnapshotMessages()) send({ ...message });
+  }
+
   // 4b. Directory→Area mappings (must arrive before existingAgents so the
   // webview seat-preference logic has the dict when characters are created).
   send({
@@ -655,10 +794,7 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
   // terminalAvailability is: no ptyManager means VS Code embedded mode, whose
   // adapter contributes its own Directories.
   if (ctx.ptyManager) {
-    send({
-      type: 'directoriesLoaded',
-      directories: listDirectories(shownHostDirectoriesFor(ctx)),
-    });
+    send(directoriesMessage(ctx));
   }
 
   // Sync runtime refs with the persisted settings so scanners behave correctly
@@ -676,7 +812,7 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
   const directoryNames: Record<number, string> = {};
   const externalAgents: Record<number, boolean> = {};
   const persistedSeats = adapter?.loadSeats() ?? {};
-  const agentMeta: Record<number, { palette?: number; hueShift?: number; seatId?: string }> = {};
+  const agentMeta: Record<number, { palette?: number; repeat?: number; seatId?: string }> = {};
   for (const [id, agent] of store) {
     applyAgentAppearance(agent, cache?.characters, store);
     agentIds.push(id);
@@ -689,10 +825,12 @@ function handleWebviewReady(send: WsSend, ctx: ClientMessageContext): void {
     const persisted = persistedSeats[String(id)];
     agentMeta[id] = {
       palette: agent.palette,
-      hueShift: agent.hueShift,
+      repeat: agent.repeat,
       seatId: persisted?.seatId,
     };
   }
+  // Before the agents, so their cards appear in order rather than reshuffle.
+  send(cardOrderMessage(adapter));
   send({
     type: 'existingAgents',
     agents: agentIds,
@@ -739,6 +877,7 @@ function settingsSnapshot(adapter: StateAdapter | undefined) {
     watchAllSessions: adapter?.getSetting(KEY_WATCH_ALL_SESSIONS, false) ?? false,
     alwaysShowLabels: adapter?.getSetting(KEY_ALWAYS_SHOW_LABELS, false) ?? false,
     cleanerAgentLabels: adapter?.getSetting(KEY_CLEANER_AGENT_LABELS, false) ?? false,
+    labelsOnlyOnWork: adapter?.getSetting(KEY_LABELS_ONLY_ON_WORK, false) ?? false,
     ghostHeadlessAgents: adapter?.getSetting(KEY_GHOST_HEADLESS_AGENTS, false) ?? false,
     // A single boolean carrying the CLAUDE provider's preference until the
     // Settings UI grows a per-provider list -- its sole webview reader is the
@@ -790,6 +929,7 @@ function refuseReadOnly(
     case 'setSoundEnabled':
     case 'setAlwaysShowLabels':
     case 'setCleanerAgentLabels':
+    case 'setLabelsOnlyOnWork':
     case 'setGhostHeadlessAgents':
     case 'setWatchAllSessions':
     case 'setShowAreas':
@@ -804,8 +944,16 @@ function refuseReadOnly(
         dirs: readConfig().externalAssetDirectories,
       });
       return;
+    case 'saveCardOrder':
+      // The bar showed the reorder already: put it back.
+      send(cardOrderMessage(ctx.store.getAdapter()));
+      return;
     case 'saveAreaMappings':
       send({ type: 'areaMappingsLoaded', mappings: readConfig().standalone.areaMappings ?? {} });
+      return;
+    case 'saveCharacterProfiles':
+      // Answered like any refused save, so the editor drops the edit instead of keeping it.
+      send(refusedSaveAnswer(msg));
       return;
   }
 }

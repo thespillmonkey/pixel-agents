@@ -1,9 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { HooksConsentRequest } from '../../../core/src/messages.js';
+import type { Directory, HooksConsentRequest } from '../../../core/src/messages.js';
+import { handleCastMessage } from '../characters/castMessages.js';
+import { castStore } from '../characters/castStore.js';
+import { startOfficeSync } from '../characters/officeSprites.js';
+import { cardOrderOf } from '../components/cardBar.js';
 import { playDoneSound, playPermissionSound, setSoundEnabled } from '../notificationSound.js';
+import { clearAgentContextUsed, setAgentContextUsed } from '../office/contextGauge.js';
 import type { ExistingAgentMeta, PendingAgent } from '../office/engine/existingAgents.js';
-import { reconcileExistingAgents } from '../office/engine/existingAgents.js';
+import {
+  reconcileExistingAgents,
+  restoreAgent,
+  staleAgentIds,
+} from '../office/engine/existingAgents.js';
 import type { OfficeState } from '../office/engine/officeState.js';
 import { setGhostHeadlessAgents as setRendererGhostHeadlessAgents } from '../office/engine/renderer.js';
 import { setFloorSprites } from '../office/floorTiles.js';
@@ -11,7 +20,6 @@ import { buildDynamicCatalog } from '../office/layout/furnitureCatalog.js';
 import { migrateLayoutColors } from '../office/layout/layoutSerializer.js';
 import { setCarpetSprites } from '../office/sprites/carpetTiles.js';
 import { setPetTemplates } from '../office/sprites/petSpriteData.js';
-import { setCharacterTemplates } from '../office/sprites/spriteData.js';
 import {
   extractToolName,
   isSubagentToolName,
@@ -21,6 +29,8 @@ import type { OfficeLayout, ToolActivity } from '../office/types.js';
 import { setWallSprites } from '../office/wallTiles.js';
 import { isBrowserRuntime, isE2E } from '../runtime.js';
 import { transport } from '../transport/index.js';
+import { onReconnect } from '../transport/onReconnect.js';
+import { handleUsageMessage } from '../usage/usageStore.js';
 
 /**
  * A Headless agent is one the office adopted from outside (`claude -p`, a session
@@ -63,13 +73,8 @@ interface FurnitureAsset {
   frame?: number;
 }
 
-export interface Directory {
-  name: string;
-  path: string;
-  /** Where the entry came from. Host-contributed entries (VS Code's workspace
-   *  folders, standalone's start directory) are read-only in the office. */
-  source: 'user' | 'host';
-}
+/** A Directory as the wire carries it (core/asyncapi.yaml documents its fields). */
+export type { Directory };
 
 /** A refused saveDirectory, shown inline in the Directory modal. `seq` rises
  *  with every rejection so a repeat of the same one still reads as new. */
@@ -92,8 +97,6 @@ interface ExtensionMessageState {
   selectedAgent: number | null;
   agentTools: Record<number, ToolActivity[]>;
   agentStatuses: Record<number, string>;
-  /** Agents whose last turn ended awaiting user input (vs a plain done). */
-  agentAwaitingInput: Record<number, boolean>;
   /** Latch: true once an agent has had any activity (first tool or status). */
   agentSeenActivity: Record<number, boolean>;
   subagentTools: Record<number, Record<string, ToolActivity[]>>;
@@ -119,6 +122,8 @@ interface ExtensionMessageState {
   watchAllSessions: boolean;
   setWatchAllSessions: (v: boolean) => void;
   alwaysShowLabels: boolean;
+  labelsOnlyOnWork: boolean;
+  setLabelsOnlyOnWork: (v: boolean) => void;
   cleanerAgentLabels: boolean;
   setCleanerAgentLabels: (v: boolean) => void;
   ghostHeadlessAgents: boolean;
@@ -159,6 +164,12 @@ interface ExtensionMessageState {
   terminalUnavailableReason: string | null;
   /** Agent ids with a live server-side PTY, in the order they opened. */
   terminalAgentIds: number[];
+  /** The agents that get a card, in the card order every client shares:
+   *  `agents` minus Teammates, the server's order first, newer agents after. */
+  cardAgents: number[];
+  /** Reorder the cards (a finished drag): shown at once, saved by the server,
+   *  which tells every open office. */
+  saveCardOrder: (order: number[]) => void;
 }
 
 /** Drop one key from a keyed-by-agent record without touching identity when
@@ -183,7 +194,6 @@ export function useExtensionMessages(
   const [selectedAgent, setSelectedAgent] = useState<number | null>(null);
   const [agentTools, setAgentTools] = useState<Record<number, ToolActivity[]>>({});
   const [agentStatuses, setAgentStatuses] = useState<Record<number, string>>({});
-  const [agentAwaitingInput, setAgentAwaitingInput] = useState<Record<number, boolean>>({});
   const [agentSeenActivity, setAgentSeenActivity] = useState<Record<number, boolean>>({});
   const markSeenActivity = (id: number) =>
     setAgentSeenActivity((prev) => (prev[id] ? prev : { ...prev, [id]: true }));
@@ -206,6 +216,7 @@ export function useExtensionMessages(
   const [extensionVersion, setExtensionVersion] = useState('');
   const [watchAllSessions, setWatchAllSessions] = useState(false);
   const [alwaysShowLabels, setAlwaysShowLabels] = useState(false);
+  const [labelsOnlyOnWork, setLabelsOnlyOnWork] = useState(false);
   const [cleanerAgentLabels, setCleanerAgentLabels] = useState(false);
   const [ghostHeadlessAgents, setGhostHeadlessAgentsState] = useState(false);
   const [hooksEnabled, setHooksEnabled] = useState(true);
@@ -229,6 +240,21 @@ export function useExtensionMessages(
   const [terminalUnavailableReason, setTerminalUnavailableReason] = useState<string | null>(null);
   /** Agent ids with a live PTY, in the order their terminals opened. */
   const [terminalAgentIds, setTerminalAgentIds] = useState<number[]>([]);
+  /** Agents that are Teammates (they have a Lead). They get no card. */
+  const [teammateIds, setTeammateIds] = useState<ReadonlySet<number>>(new Set());
+  const markTeammate = (id: number) =>
+    setTeammateIds((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+  const unmarkTeammate = (id: number) =>
+    setTeammateIds((prev) => (prev.has(id) ? new Set([...prev].filter((t) => t !== id)) : prev));
+  const [cardOrder, setCardOrder] = useState<number[]>([]);
+  const cardAgents = useMemo(
+    () => cardOrderOf(cardOrder, agents, teammateIds),
+    [cardOrder, agents, teammateIds],
+  );
+  const saveCardOrder = useCallback((order: number[]) => {
+    setCardOrder(order);
+    transport.send({ type: 'saveCardOrder', order });
+  }, []);
 
   // The renderer keeps its own module-level copy (read every rAF frame), so both
   // sources of truth move together — the persisted value on settingsLoaded and
@@ -247,6 +273,9 @@ export function useExtensionMessages(
   // character to a new tile every turn. Cleared by subagentClear/agentClosed.
   const backgroundParentToolIdsRef = useRef<Record<number, Set<string>>>({});
 
+  // the office wears the cast
+  useEffect(() => startOfficeSync(castStore), []);
+
   useEffect(() => {
     // Buffer agents from existingAgents until layout is loaded
     let pendingAgents: PendingAgent[] = [];
@@ -257,6 +286,48 @@ export function useExtensionMessages(
     const noteDirectoryName = (name?: string) => {
       if (!name) return;
       setAgentDirectoryNames((prev) => (prev.includes(name) ? prev : [...prev, name]));
+    };
+
+    const closeAgent = (os: OfficeState, id: number) => {
+      setAgents((prev) => prev.filter((a) => a !== id));
+      setSelectedAgent((prev) => (prev === id ? null : prev));
+      // Drop the drawer tab too. terminalSessionClosed normally does this, but
+      // an agent can be removed without its PTY ever reporting an exit (e.g.
+      // stale cleanup), and a tab for a gone agent would attach to nothing.
+      setTerminalAgentIds((prev) => prev.filter((a) => a !== id));
+      unmarkTeammate(id);
+      setAgentTools((prev) => omitKey(prev, id));
+      setAgentStatuses((prev) => omitKey(prev, id));
+      setAgentSeenActivity((prev) => omitKey(prev, id));
+      setSubagentTools((prev) => omitKey(prev, id));
+      // Remove all sub-agent characters belonging to this agent
+      delete backgroundParentToolIdsRef.current[id];
+      os.removeAllSubagents(id);
+      setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id));
+      os.removeAgent(id);
+      clearAgentContextUsed(id);
+    };
+
+    // A dropped socket (a phone's screen going off, a server restart) loses
+    // every broadcast sent meanwhile, and none is ever replayed: a missed
+    // subagentClear left its sub-agent in the office until a reload. So each
+    // reconnect asks for the snapshot again (webviewReady) and takes it as the
+    // whole truth: agents it doesn't list are closed, and activity — tools,
+    // statuses, sub-agents — is dropped for the replay that follows the
+    // snapshot to rebuild. Live sub-agents return on the spot they left.
+    let resyncPending = false;
+    const resyncFromSnapshot = (os: OfficeState, incoming: number[]) => {
+      for (const id of staleAgentIds(os.characters.keys(), incoming)) closeAgent(os, id);
+      os.detachSubagentsForResync();
+      setSubagentCharacters([]);
+      setSubagentTools({});
+      setAgentTools({});
+      setAgentStatuses({});
+      backgroundParentToolIdsRef.current = {};
+      for (const id of incoming) {
+        os.setAgentTool(id, null);
+        os.setAgentActive(id, false);
+      }
     };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -282,6 +353,11 @@ export function useExtensionMessages(
           parentToolId: msg.parentToolId,
         });
       }
+
+      // Usage bars (usage/usageStore.ts): the bridge's state and the plan usage.
+      if (handleUsageMessage(msg)) return;
+      // The cast (characters/castMessages.ts): profiles, items, looks, external sprites.
+      if (handleCastMessage(msg, os)) return;
 
       if (msg.type === 'providerCapabilities') {
         setProviderCapabilities({
@@ -332,10 +408,7 @@ export function useExtensionMessages(
           onLayoutLoaded?.(os.getLayout());
         }
         // Add buffered agents now that layout (and seats) are correct
-        for (const p of pendingAgents) {
-          os.addAgent(p.id, p.palette, p.hueShift, p.seatId, true, p.directoryName);
-          if (p.isHeadless) os.setHeadless(p.id, true);
-        }
+        for (const p of pendingAgents) restoreAgent(os, p);
         pendingAgents = [];
         layoutReadyRef.current = true;
         setLayoutReady(true);
@@ -358,16 +431,20 @@ export function useExtensionMessages(
           setSelectedAgent(id);
         }
         if (isTeammate && teammateParentId !== undefined) {
+          markTeammate(id);
           // Teammate: inherit parent's palette and workspace directoryName (teammate runs
           // in the same workspace as the lead). Name shown via agentName (teamRoleLabel).
           // Seat them at the free seat closest to the lead so the team clusters.
+          // The server's look wins (it copied the lead's when the teammate was
+          // created); the lead's character here is only a fallback.
           const parentCh = os.characters.get(teammateParentId);
-          const palette = parentCh ? parentCh.palette : undefined;
-          const hueShift = parentCh ? parentCh.hueShift : undefined;
+          const palette = (msg.palette as number | undefined) ?? parentCh?.palette;
+          const repeat =
+            msg.palette !== undefined ? (msg.repeat as number | undefined) : parentCh?.repeat;
           os.addAgent(
             id,
             palette,
-            hueShift,
+            repeat,
             undefined,
             undefined,
             parentCh?.directoryName,
@@ -383,8 +460,10 @@ export function useExtensionMessages(
           }
         } else {
           const palette = msg.palette as number | undefined;
-          const hueShift = msg.hueShift as number | undefined;
-          os.addAgent(id, palette, hueShift, undefined, undefined, directoryName);
+          const repeat = msg.repeat as number | undefined;
+          // A resumed conversation asks for the seat its agent sat in.
+          const seatId = msg.seatId as string | undefined;
+          os.addAgent(id, palette, repeat, seatId, undefined, directoryName);
           noteDirectoryName(directoryName);
           if (isHeadlessAgent(msg.isExternal as boolean | undefined)) {
             os.setHeadless(id, true);
@@ -392,25 +471,13 @@ export function useExtensionMessages(
         }
         saveAgentSeats(os);
       } else if (msg.type === 'agentClosed') {
-        const id = msg.id as number;
-        setAgents((prev) => prev.filter((a) => a !== id));
-        setSelectedAgent((prev) => (prev === id ? null : prev));
-        // Drop the drawer tab too. terminalSessionClosed normally does this, but
-        // an agent can be removed without its PTY ever reporting an exit (e.g.
-        // stale cleanup), and a tab for a gone agent would attach to nothing.
-        setTerminalAgentIds((prev) => prev.filter((a) => a !== id));
-        setAgentTools((prev) => omitKey(prev, id));
-        setAgentStatuses((prev) => omitKey(prev, id));
-        setAgentAwaitingInput((prev) => omitKey(prev, id));
-        setAgentSeenActivity((prev) => omitKey(prev, id));
-        setSubagentTools((prev) => omitKey(prev, id));
-        // Remove all sub-agent characters belonging to this agent
-        delete backgroundParentToolIdsRef.current[id];
-        os.removeAllSubagents(id);
-        setSubagentCharacters((prev) => prev.filter((s) => s.parentAgentId !== id));
-        os.removeAgent(id);
+        closeAgent(os, msg.id as number);
       } else if (msg.type === 'existingAgents') {
         const incoming = msg.agents as number[];
+        if (resyncPending) {
+          resyncPending = false;
+          resyncFromSnapshot(os, incoming);
+        }
         const meta = (msg.agentMeta || {}) as Record<number, ExistingAgentMeta>;
         const directoryNames = (msg.directoryNames || {}) as Record<number, string>;
         const externalAgents = (msg.externalAgents || {}) as Record<number, boolean>;
@@ -567,11 +634,6 @@ export function useExtensionMessages(
           if (status === 'active') return omitKey(prev, id);
           return { ...prev, [id]: status };
         });
-        setAgentAwaitingInput((prev) => {
-          const awaiting = status === 'waiting' && msg.awaitingInput === true;
-          if ((prev[id] ?? false) === awaiting) return prev;
-          return { ...prev, [id]: awaiting };
-        });
         os.setAgentActive(id, status === 'active');
         if (status === 'waiting') {
           os.showWaitingBubble(id, msg.awaitingInput === true);
@@ -693,18 +755,10 @@ export function useExtensionMessages(
         const ch = os.characters.get(msg.id);
         if (ch) {
           ch.palette = msg.palette;
-          ch.hueShift = msg.hueShift;
+          ch.repeat = msg.repeat;
           // Canvas is imperative, but drawer/card portraits also need a React refresh.
           setAgents((current) => [...current]);
         }
-      } else if (msg.type === 'characterSpritesLoaded') {
-        const characters = msg.characters as Array<{
-          down: string[][][];
-          up: string[][][];
-          right: string[][][];
-        }>;
-        console.log(`[Webview] Received ${characters.length} pre-colored character sprites`);
-        setCharacterTemplates(characters);
       } else if (msg.type === 'petSpritesLoaded') {
         const pets = msg.pets;
         if (!Array.isArray(pets)) {
@@ -734,6 +788,8 @@ export function useExtensionMessages(
         const sets = msg.sets as string[][][][];
         console.log(`[Webview] Received ${sets.length} carpet variant(s)`);
         setCarpetSprites(sets);
+      } else if (msg.type === 'cardOrderLoaded') {
+        setCardOrder(msg.order);
       } else if (msg.type === 'areaMappingsLoaded') {
         const mappings = (msg.mappings ?? {}) as Record<string, string[]>;
         setAreaMappings(mappings);
@@ -758,6 +814,7 @@ export function useExtensionMessages(
         if (typeof msg.watchAllSessions === 'boolean') {
           setWatchAllSessions(msg.watchAllSessions as boolean);
         }
+        setLabelsOnlyOnWork(msg.labelsOnlyOnWork === true);
         if (typeof msg.cleanerAgentLabels === 'boolean') {
           setCleanerAgentLabels(msg.cleanerAgentLabels);
         }
@@ -847,6 +904,13 @@ export function useExtensionMessages(
         }
       } else if (msg.type === 'agentTeamInfo') {
         const id = msg.id as number;
+        // Each team-info message is the agent's whole team state: a lead id
+        // makes it a Teammate, none makes it a main agent again.
+        if (msg.leadAgentId !== undefined) {
+          markTeammate(id);
+        } else {
+          unmarkTeammate(id);
+        }
         os.setTeamInfo(
           id,
           msg.teamName as string | undefined,
@@ -858,11 +922,21 @@ export function useExtensionMessages(
       } else if (msg.type === 'agentContextUsage') {
         const id = msg.id as number;
         os.setAgentContext(id, msg.contextTokens as number, msg.maxContextTokens as number);
+        setAgentContextUsed(id, msg.contextTokens as number, msg.maxContextTokens as number);
       }
     };
     const unsubscribe = transport.onMessage(handler);
     transport.send({ type: 'webviewReady' });
-    return unsubscribe;
+    // The first connect flushes the webviewReady queued above; every later one
+    // is a reconnect and resyncs (see resyncFromSnapshot).
+    const unsubscribeReconnect = onReconnect(transport, () => {
+      resyncPending = true;
+      transport.send({ type: 'webviewReady' });
+    });
+    return () => {
+      unsubscribe();
+      unsubscribeReconnect();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getOfficeState]);
 
@@ -883,10 +957,11 @@ export function useExtensionMessages(
 
   return {
     agents,
+    cardAgents,
+    saveCardOrder,
     selectedAgent,
     agentTools,
     agentStatuses,
-    agentAwaitingInput,
     agentSeenActivity,
     subagentTools,
     subagentCharacters,
@@ -904,6 +979,8 @@ export function useExtensionMessages(
     watchAllSessions,
     setWatchAllSessions,
     alwaysShowLabels,
+    labelsOnlyOnWork,
+    setLabelsOnlyOnWork,
     cleanerAgentLabels,
     setCleanerAgentLabels,
     ghostHeadlessAgents,

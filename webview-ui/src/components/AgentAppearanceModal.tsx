@@ -11,11 +11,11 @@ import { Modal } from './ui/Modal.js';
 /** Independent canvas: draft choices never touch the office character. */
 function CharacterPreview({
   palette,
-  hueShift = 0,
+  repeat = 0,
   size = 96,
 }: {
   palette: number;
-  hueShift?: number;
+  repeat?: number;
   size?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -25,7 +25,7 @@ function CharacterPreview({
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext('2d');
       if (!canvas || !ctx) return;
-      const sprites = getCharacterSprites(palette, hueShift).walk[Direction.DOWN];
+      const sprites = getCharacterSprites(palette, repeat).walk[Direction.DOWN];
       const sprite = getCachedSprite(sprites[Math.floor(Date.now() / 180) % sprites.length], 4);
       canvas.width = sprite.width;
       canvas.height = sprite.height;
@@ -36,7 +36,7 @@ function CharacterPreview({
     };
     draw();
     return () => cancelAnimationFrame(frame);
-  }, [palette, hueShift]);
+  }, [palette, repeat]);
   return (
     <canvas
       ref={canvasRef}
@@ -121,7 +121,7 @@ export function AgentAppearanceModal({
             >
               <CharacterPreview
                 palette={selected?.palette ?? data.palette}
-                hueShift={selected ? 0 : data.hueShift}
+                repeat={selected ? 0 : data.repeat}
                 size={160}
               />
               <span>

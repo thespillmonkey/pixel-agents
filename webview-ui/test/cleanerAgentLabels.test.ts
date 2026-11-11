@@ -48,6 +48,7 @@ function renderLabels(
       onCloseAgent: () => {},
       alwaysShowOverlay,
       cleanerAgentLabels,
+      labelsOnlyOnWork: false,
     }),
   );
 }

@@ -4,8 +4,10 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import type { StateAdapter } from '../../core/src/adapter.js';
+import { rosterPick } from '../../core/src/paletteUtils.js';
 import type { HookProvider } from '../../core/src/provider.js';
 import { buildAgentDiagnostics } from '../../server/src/agentDiagnostics.js';
+import { agentCreatedMessage } from '../../server/src/agentMessages.js';
 import { AgentRuntime } from '../../server/src/agentRuntime.js';
 import { AgentStateStore } from '../../server/src/agentStateStore.js';
 import type {
@@ -25,7 +27,17 @@ import {
   sendPetSpritesToWebview,
   sendWallTilesToWebview,
 } from '../../server/src/assetLoader.js';
-import { loadAllCharacters, loadAllFurniture, loadAllPets } from '../../server/src/assetReload.js';
+import {
+  loadAllFurniture,
+  loadAllPets,
+  loadExternalCharacters,
+} from '../../server/src/assetReload.js';
+import { cardOrderMessage, saveCardOrder } from '../../server/src/cardOrder.js';
+import {
+  characterProfilesLoadedMessage,
+  handleCharacterProfilesClientMessage,
+  watchCharacterProfiles,
+} from '../../server/src/characterProfilesPersistence.js';
 import {
   getHooksConsent,
   getHooksEnabled,
@@ -41,12 +53,13 @@ import {
 } from '../../server/src/directories.js';
 import { collectDirectorySuggestions } from '../../server/src/directorySuggestions.js';
 import { setDirectoryNameResolver, setTerminalAdapter } from '../../server/src/fileWatcher.js';
-import type { LayoutWatcher } from '../../server/src/layoutPersistence.js';
+import type { JsonFileWatcher } from '../../server/src/jsonFileWatcher.js';
 import {
   readLayoutFromFile,
   watchLayoutFile,
   writeLayoutToFile,
 } from '../../server/src/layoutPersistence.js';
+import { getPaletteCount } from '../../server/src/paletteAssigner.js';
 import { PathSet } from '../../server/src/pathKey.js';
 import type { ConsentEffects } from '../../server/src/providers/hook/consentExecutor.js';
 import { applyConsentChoice } from '../../server/src/providers/hook/consentExecutor.js';
@@ -60,7 +73,9 @@ import {
   hookProviders,
   openClawProvider,
 } from '../../server/src/providers/index.js';
+import { recentCharactersMessage, recordCharacterUse } from '../../server/src/recentCharacters.js';
 import { PixelAgentsServer } from '../../server/src/server.js';
+import { applyUsageBridgeChoice, usageSnapshotMessages } from '../../server/src/usageLimits.js';
 import {
   getProjectDirPath,
   launchNewTerminal,
@@ -77,6 +92,7 @@ import {
   GLOBAL_KEY_CLEANER_AGENT_LABELS,
   GLOBAL_KEY_GHOST_HEADLESS_AGENTS,
   GLOBAL_KEY_HOOKS_INFO_SHOWN,
+  GLOBAL_KEY_LABELS_ONLY_ON_WORK,
   GLOBAL_KEY_LAST_SEEN_VERSION,
   GLOBAL_KEY_SHOW_AREAS,
   GLOBAL_KEY_SHOW_HOST_DIRECTORIES,
@@ -117,7 +133,8 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   private assetsRoot: string | null = null;
 
   // Cross-window layout sync
-  layoutWatcher: LayoutWatcher | null = null;
+  layoutWatcher: JsonFileWatcher | null = null;
+  private characterProfilesWatcher: { dispose(): void }; // characters.json, shared cross-process
 
   // Pixel Agents Server (hook event reception)
   private pixelAgentsServer: PixelAgentsServer | null = null;
@@ -133,6 +150,12 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   ) {
     this.adapter = adapter;
     this.store.setAdapter(this.adapter);
+    // Through the store: the panel hears it there, and so do the embedded
+    // server's /ws clients.
+    this.characterProfilesWatcher = watchCharacterProfiles(
+      (m) => this.store.broadcast(m),
+      this.store,
+    );
     // Workspace folders are this host's Directory contribution, so a folder
     // added to or removed from the workspace changes the union the drawer
     // shows. Registered once here (not per resolveWebviewView) and buffered
@@ -141,19 +164,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
       vscode.workspace.onDidChangeWorkspaceFolders(() => this.sendDirectories()),
     );
     this.store.on('agentAdded', (id, agent) => {
-      this.sendOrBuffer({
-        type: 'agentCreated',
-        id,
-        directoryName: agent.directoryName,
-        isExternal: agent.isExternal || undefined,
-        isTeammate: agent.leadAgentId !== undefined || undefined,
-        teammateName: agent.agentName,
-        parentAgentId: agent.leadAgentId,
-        teamName: agent.teamName,
-        hooksOnly: agent.hooksOnly || undefined,
-        palette: agent.palette,
-        hueShift: agent.hueShift,
-      });
+      this.sendOrBuffer(agentCreatedMessage(id, agent));
     });
     this.store.on('agentRemoved', (id) => {
       this.sendOrBuffer({ type: 'agentClosed', id });
@@ -279,6 +290,11 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         this.runtime.hooksEnabled.current = hooksEnabled;
         if (hooksEnabled) {
           void this.installHooksIfConsented(config.port, config.token);
+        }
+        // An installed usage bridge runs the script from ~/.pixel-agents/hooks/:
+        // bring it up to this version's copy.
+        for (const provider of hookProviders) {
+          provider.usageBridge?.refreshScript(this.context.extensionPath);
         }
         console.log(`[Pixel Agents] Server: ready on port ${config.port}`);
       })
@@ -476,6 +492,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage(async (message) => {
       if (message.type === 'launchAgent') {
         const prevAgentIds = new Set(this.store.keys());
+        const picked = rosterPick(message.palette, getPaletteCount());
         await launchNewTerminal(
           this.store.nextAgentId,
           this.store.nextTerminalIndex,
@@ -489,14 +506,24 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           this.runtime.jsonlPollTimers,
           this.runtime.projectScanTimer,
           () => this.store.persist(),
-          // Every launch comes from a drawer row and carries its Directory's
-          // path; no directoryPath leaves launchNewTerminal's own fallback —
-          // the first workspace folder — exactly as it was.
-          message.directoryPath as string | undefined,
-          // Permission posture is a persisted per-host setting, never a
-          // per-launch field: the webview sends only where to launch.
-          this.adapter.getSetting<boolean>(GLOBAL_KEY_BYPASS_PERMISSIONS, false),
+          {
+            // Every launch comes from a drawer row and carries its Directory's
+            // path; no directoryPath leaves launchNewTerminal's own fallback —
+            // the first workspace folder — exactly as it was.
+            directoryPath: message.directoryPath as string | undefined,
+            // Permission posture is a persisted per-host setting, never a
+            // per-launch field: the webview sends only where to launch (and,
+            // picked from the roster, which character).
+            bypassPermissions: this.adapter.getSetting<boolean>(
+              GLOBAL_KEY_BYPASS_PERMISSIONS,
+              false,
+            ),
+            palette: picked,
+          },
         );
+        // A roster pick moves to the front of the roster.
+        const recent = recordCharacterUse(picked);
+        if (recent) this.sendOrBuffer(recent);
         // Register newly created agent(s) with hook handler
         for (const [id, agent] of this.store) {
           if (!prevAgentIds.has(id)) {
@@ -532,8 +559,26 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         // Store seat assignments in a separate key (never touched by persistAgents)
         console.log(`[Pixel Agents] State: saveAgentSeats:`, JSON.stringify(message.seats));
         this.adapter.saveSeats(message.seats);
+      } else if (message.type === 'saveCardOrder') {
+        const loaded = saveCardOrder(this.adapter, message.order, (id) => this.store.has(id));
+        if (loaded) this.sendOrBuffer(loaded);
+      } else if (message.type === 'saveCharacterProfiles') {
+        // The broadcast goes through the store, so the embedded server's /ws
+        // clients get it too (the panel hears it there); a refused save's
+        // reply is for the panel alone.
+        const send = (m: Record<string, unknown>) => this.sendOrBuffer(m);
+        handleCharacterProfilesClientMessage(message, {
+          broadcast: (m) => this.store.broadcast(m),
+          reply: send,
+          store: this.store,
+          sharedRefsChanged: () => {
+            this.sendDirectories();
+            send(recentCharactersMessage());
+          },
+        });
+      } else if (message.type === 'exportFile') {
+        await this.exportFile(message.filename, message.dataBase64);
       } else if (message.type === 'saveLayout') {
-        this.layoutWatcher?.markOwnWrite();
         writeLayoutToFile(message.layout as Record<string, unknown>);
       } else if (message.type === 'setSoundEnabled') {
         this.adapter.setSetting(GLOBAL_KEY_SOUND_ENABLED, message.enabled);
@@ -543,6 +588,8 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         this.adapter.setSetting(GLOBAL_KEY_ALWAYS_SHOW_LABELS, message.enabled);
       } else if (message.type === 'setCleanerAgentLabels') {
         this.adapter.setSetting(GLOBAL_KEY_CLEANER_AGENT_LABELS, message.enabled);
+      } else if (message.type === 'setLabelsOnlyOnWork') {
+        this.adapter.setSetting(GLOBAL_KEY_LABELS_ONLY_ON_WORK, message.enabled);
       } else if (message.type === 'setGhostHeadlessAgents') {
         this.adapter.setSetting(GLOBAL_KEY_GHOST_HEADLESS_AGENTS, message.enabled);
       } else if (message.type === 'setHooksEnabled') {
@@ -551,6 +598,18 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
         // junk consent choice.
         const provider = hookProviderById(message.providerId);
         if (provider) void this.setHooksEnabled(provider, message.enabled as boolean);
+      } else if (message.type === 'setUsageBridgeEnabled') {
+        const provider = hookProviderById(message.providerId);
+        if (provider?.usageBridge && typeof message.enabled === 'boolean') {
+          void applyUsageBridgeChoice(provider, this.context.extensionPath, message.enabled).then(
+            (status) => {
+              if (status.error) {
+                vscode.window.showErrorMessage(`Pixel Agents: ${status.error}`);
+              }
+              this.sendOrBuffer({ ...status });
+            },
+          );
+        }
       } else if (message.type === 'hooksConsentResponse') {
         const provider = hookProviderById(message.providerId);
         if (provider) {
@@ -672,6 +731,10 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           GLOBAL_KEY_CLEANER_AGENT_LABELS,
           false,
         );
+        const labelsOnlyOnWork = this.adapter.getSetting<boolean>(
+          GLOBAL_KEY_LABELS_ONLY_ON_WORK,
+          false,
+        );
         const ghostHeadlessAgents = this.adapter.getSetting<boolean>(
           GLOBAL_KEY_GHOST_HEADLESS_AGENTS,
           false,
@@ -700,6 +763,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           watchAllSessions,
           alwaysShowLabels,
           cleanerAgentLabels,
+          labelsOnlyOnWork,
           ghostHeadlessAgents,
           hooksEnabled,
           hooksInfoShown,
@@ -748,12 +812,17 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           if (consentRequest) this.webview?.postMessage(consentRequest);
         }
 
+        // Usage bars: install state and the last known account usage.
+        for (const message of usageSnapshotMessages()) this.webview?.postMessage(message);
+
         // Directory→Area mappings (must arrive before any agentCreated/existingAgents
         // so OfficeState.findFreeSeat has the dict when characters are placed).
         this.webview?.postMessage({
           type: 'areaMappingsLoaded',
           mappings: config.vscode.areaMappings ?? {},
         });
+        // Before the agents, so their cards appear in order rather than reshuffle.
+        this.webview?.postMessage(cardOrderMessage(this.adapter));
 
         restoreAgents(
           this.adapter,
@@ -803,11 +872,10 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
             this.runtime.jsonlPollTimers,
             this.runtime.projectScanTimer,
             () => this.store.persist(),
-            undefined,
-            // Auto-spawn is a launch like any other, so it runs under the same
-            // persisted permission posture.
-            bypassPermissions,
-            autoShowPanel,
+            // No directoryPath: the workspace fallback. Auto-spawn is a launch
+            // like any other, so it runs under the same persisted permission
+            // posture.
+            { bypassPermissions, suppressShow: autoShowPanel },
           );
           for (const [id, agent] of this.store) {
             if (!prevAgentIds.has(id)) {
@@ -854,6 +922,10 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
 
         this.runtime.startStaleCheck();
 
+        // Character profiles (the cast agents are drawn from), before any asset or layout
+        this.webview?.postMessage(characterProfilesLoadedMessage());
+        this.webview?.postMessage(recentCharactersMessage());
+
         // Load furniture assets BEFORE sending layout
         (async () => {
           try {
@@ -890,14 +962,9 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
             // Load bundled default layout
             this.defaultLayout = loadDefaultLayout(assetsRoot);
 
-            // Load character sprites (bundled + external)
-            const charSprites = await this.loadAllCharacterSprites();
-            if (charSprites && this.webview) {
-              console.log(
-                `[Extension] ${charSprites.characters.length} character sprites loaded, sending to webview`,
-              );
-              sendCharacterSpritesToWebview(this.webview, charSprites);
-            }
+            // Character sprites from external directories (the built-in cast is the profiles)
+            const charSprites = await this.loadExternalCharacterSprites();
+            if (this.webview) sendCharacterSpritesToWebview(this.webview, charSprites);
 
             // Load pet sprites (bundled + external)
             const petSprites = await this.loadAllPetSprites();
@@ -1019,7 +1086,6 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
             vscode.window.showErrorMessage('Pixel Agents: Invalid layout file.');
             return;
           }
-          this.layoutWatcher?.markOwnWrite();
           writeLayoutToFile(imported);
           this.webview?.postMessage({ type: 'layoutLoaded', layout: imported });
           vscode.window.showInformationMessage('Pixel Agents: Layout imported successfully.');
@@ -1100,9 +1166,28 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     return loadAllFurniture(this.assetsRoot, readConfig().externalAssetDirectories);
   }
 
-  private async loadAllCharacterSprites(): Promise<LoadedCharacterSprites | null> {
-    if (!this.assetsRoot) return null;
-    return loadAllCharacters(this.assetsRoot, readConfig().externalAssetDirectories);
+  private loadExternalCharacterSprites(): Promise<LoadedCharacterSprites> {
+    return loadExternalCharacters(readConfig().externalAssetDirectories);
+  }
+
+  /** Save a file the webview generated (character sheet, roster zip, profile JSON) via the save dialog. */
+  private async exportFile(filename: unknown, dataBase64: unknown): Promise<void> {
+    if (typeof filename !== 'string' || typeof dataBase64 !== 'string') return;
+    const safeName = path.basename(filename) || 'export';
+    const ext = path.extname(safeName).slice(1);
+    const uri = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file(path.join(os.homedir(), safeName)),
+      filters: ext ? { [ext.toUpperCase()]: [ext] } : undefined,
+    });
+    if (!uri) return;
+    try {
+      fs.writeFileSync(uri.fsPath, Buffer.from(dataBase64, 'base64'));
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      vscode.window.showErrorMessage(`Pixel Agents: Failed to save ${uri.fsPath}: ${reason}`);
+      return;
+    }
+    vscode.window.showInformationMessage(`Pixel Agents: Saved ${path.basename(uri.fsPath)}.`);
   }
 
   private async loadAllPetSprites(): Promise<LoadedPetSprites | null> {
@@ -1125,10 +1210,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
   private async reloadAndSendCharacters(): Promise<void> {
     if (!this.assetsRoot || !this.webview) return;
     try {
-      const chars = await this.loadAllCharacterSprites();
-      if (chars) {
-        sendCharacterSpritesToWebview(this.webview, chars);
-      }
+      sendCharacterSpritesToWebview(this.webview, await this.loadExternalCharacterSprites());
     } catch (err) {
       console.error('[Extension] Error reloading character sprites:', err);
     }
@@ -1160,6 +1242,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     this.runtime.dispose();
     this.layoutWatcher?.dispose();
     this.layoutWatcher = null;
+    this.characterProfilesWatcher.dispose();
     this.store.dispose();
   }
 }

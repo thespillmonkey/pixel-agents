@@ -3,6 +3,7 @@ import * as path from 'path';
 import type { AgentEvent, HookProvider } from '../../core/src/provider.js';
 import type { AgentStateStore } from './agentStateStore.js';
 import { OPENCLAW_SUBAGENT_INACTIVITY_MS, SESSION_END_GRACE_MS } from './constants.js';
+import { pathsMatch } from './pathKey.js';
 import type { SessionRouter } from './sessionRouter.js';
 import { getInlineTeammates, hasInlineTeammates, hasPromotedBackgroundAgent } from './teamUtils.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
@@ -234,7 +235,7 @@ export class HookEventHandler {
                 type: 'agentAppearanceChanged',
                 id: agent.id,
                 palette: agent.palette ?? 0,
-                hueShift: agent.hueShift ?? 0,
+                repeat: agent.repeat ?? 0,
               });
               this.agents.broadcast({ type: 'agentTeamInfo', id: agent.id, agentName: name });
               this.agents.persist();
@@ -522,6 +523,7 @@ export class HookEventHandler {
     // Cancel waiting, mark active
     cancelWaitingTimer(agentId, this.waitingTimers);
     agent.isWaiting = false;
+    agent.turnActive = true;
     agent.permissionSent = false;
     agent.hadToolsInTurn = true;
 
@@ -728,11 +730,19 @@ export class HookEventHandler {
     //   - SessionEnd on lead (removeTeammates in ViewProvider)
     const inlineTeammates = getInlineTeammates(agentId, this.agents);
     if (inlineTeammates.length > 0) {
+      // The CLI names the sub-agent that stopped: only that teammate is done.
+      // In-process teammates share the lead's session, so without the name
+      // every one of them got the waiting checkmark whenever any stopped.
+      // Only a CLI that names nobody falls back to marking them all.
+      const stoppedPath = normEvent.agentTranscriptPath;
+      const stopped = stoppedPath
+        ? inlineTeammates.filter(([, a]) => pathsMatch(a.jsonlFile, stoppedPath))
+        : inlineTeammates;
       if (debug)
         console.log(
-          `[Pixel Agents] Hook: Agent ${agentId} - SubagentStop: marking inline teammates as waiting`,
+          `[Pixel Agents] Hook: Agent ${agentId} - SubagentStop: marking ${stopped.length} inline teammate(s) as waiting`,
         );
-      for (const [id, a] of inlineTeammates) {
+      for (const [id, a] of stopped) {
         this.markAgentWaiting(a, id);
       }
       return;
@@ -885,7 +895,7 @@ export class HookEventHandler {
     // sub-agent characters and permission bubbles from the turn would never clear.
     const parentTools = this.getSubagentToolSet();
     for (const toolId of [...agent.activeToolIds]) {
-      if (agent.backgroundAgentToolIds.has(toolId)) continue;
+      if (agent.backgroundSpawns.has(toolId)) continue;
       agent.activeToolIds.delete(toolId);
       agent.activeToolStatuses.delete(toolId);
       const toolName = agent.activeToolNames.get(toolId);
@@ -904,7 +914,7 @@ export class HookEventHandler {
     // recognize the re-sent tool as a subagent spawn and never recreates the
     // Subtask sub-character (extractToolName("Subtask: ...") is not a tool).
     // Skip tools whose background agent was promoted to its own character.
-    for (const toolId of agent.backgroundAgentToolIds) {
+    for (const toolId of agent.backgroundSpawns.keys()) {
       if (hasPromotedBackgroundAgent(agentId, toolId, this.agents)) continue;
       const status = agent.activeToolStatuses.get(toolId);
       if (status) {
@@ -921,6 +931,7 @@ export class HookEventHandler {
     }
 
     agent.isWaiting = true;
+    agent.turnActive = false;
     agent.permissionSent = false;
     agent.hadToolsInTurn = false;
     agent.currentHookToolId = undefined;

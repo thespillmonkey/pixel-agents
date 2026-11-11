@@ -20,6 +20,7 @@ export const REQUIRED_PACKAGE_FILES = [
   'dist/cli.js',
   'dist/extension.js',
   'dist/hooks/claude-hook.js',
+  'dist/hooks/claude-statusline.js',
   'dist/openclaw-plugin/index.js',
   'dist/openclaw-plugin/openclaw.plugin.json',
   'dist/openclaw-plugin/package.json',
@@ -29,11 +30,7 @@ export const REQUIRED_PACKAGE_FILES = [
   'package.json',
 ];
 
-export const REQUIRED_PACKAGE_PREFIXES = [
-  'dist/assets/characters/',
-  'dist/assets/furniture/',
-  'dist/webview/assets/',
-];
+export const REQUIRED_PACKAGE_PREFIXES = ['dist/assets/furniture/', 'dist/webview/assets/'];
 
 export const FORBIDDEN_PACKAGE_PREFIXES = [
   '.github/',

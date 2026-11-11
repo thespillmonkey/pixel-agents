@@ -1,7 +1,8 @@
 import type { AgentStateStore } from './agentStateStore.js';
 import type { LoadedCharacterSprites } from './assetLoader.js';
+import { getCharacterProfiles } from './characterProfilesStore.js';
 import { readConfig, writeConfig } from './configPersistence.js';
-import { assignPaletteIfNeeded } from './paletteAssigner.js';
+import { assignPaletteIfNeeded, getPaletteCount } from './paletteAssigner.js';
 import type { AgentState } from './types.js';
 
 /** Names, never transient numeric session IDs, own the preference. */
@@ -10,11 +11,18 @@ export function appearanceName(agent: AgentState): string {
 }
 
 export function appearanceInventory(characters: LoadedCharacterSprites | null | undefined) {
-  return (characters?.characters ?? []).map((_, palette) => ({
-    id: characters?.characterIds?.[palette] ?? `builtin:${palette}`,
-    label: `Character ${palette + 1}`,
-    palette,
-  }));
+  const profiles = getCharacterProfiles();
+  return [
+    ...profiles.map((profile, palette) => ({
+      id: 'profile:' + profile.id,
+      label: profile.name || 'Character ' + (palette + 1),
+      palette,
+    })),
+    ...(characters?.characters ?? []).flatMap((_, index) => {
+      const id = characters?.characterIds?.[index];
+      return id ? [{ id, label: 'External character ' + (index + 1), palette: profiles.length + index }] : [];
+    }),
+  ];
 }
 
 export function applyAgentAppearance(
@@ -31,16 +39,16 @@ export function applyAgentAppearance(
     if (
       store &&
       characters &&
-      (agent.palette === undefined || agent.palette >= characters.characters.length)
+      (agent.palette === undefined || agent.palette >= getPaletteCount())
     ) {
       delete agent.palette;
-      delete agent.hueShift;
+      delete agent.repeat;
       assignPaletteIfNeeded(agent, store);
     }
     return false;
   }
   agent.palette = item.palette;
-  agent.hueShift = 0;
+  agent.repeat = 0;
   return true;
 }
 
@@ -74,14 +82,14 @@ export function saveAgentAppearance(
     if (appearanceName(current) !== name) continue;
     if (assetId === null) {
       delete current.palette;
-      delete current.hueShift;
+      delete current.repeat;
       assignPaletteIfNeeded(current, store);
     } else applyAgentAppearance(current, characters);
     store.broadcast({
       type: 'agentAppearanceChanged',
       id: current.id,
       palette: current.palette,
-      hueShift: current.hueShift ?? 0,
+      repeat: current.repeat ?? 0,
     });
   }
   store.persist();

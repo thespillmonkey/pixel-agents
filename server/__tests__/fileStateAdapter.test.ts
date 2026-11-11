@@ -78,6 +78,22 @@ describe('FileStateAdapter', () => {
     }
   });
 
+  it('defaults missing legacy work-only to OFF and retains it through Always disable/reload in both namespaces', () => {
+    for (const namespace of ['standalone', 'vscode'] as const) {
+      const adapter = new FileStateAdapter({ namespace });
+      expect(adapter.getSetting('pixel-agents.labelsOnlyOnWork', true)).toBe(false);
+      adapter.setSetting('pixel-agents.labelsOnlyOnWork', true);
+      adapter.setSetting('pixel-agents.alwaysShowLabels', true);
+      const reload = new FileStateAdapter({ namespace });
+      expect(reload.getSetting('pixel-agents.labelsOnlyOnWork', false)).toBe(true);
+      expect(reload.getSetting('pixel-agents.alwaysShowLabels', false)).toBe(true);
+      reload.setSetting('pixel-agents.alwaysShowLabels', false);
+      expect(new FileStateAdapter({ namespace }).getSetting('pixel-agents.labelsOnlyOnWork', false)).toBe(true);
+      reload.setSetting('pixel-agents.labelsOnlyOnWork', false);
+      expect(new FileStateAdapter({ namespace }).getSetting('pixel-agents.labelsOnlyOnWork', true)).toBe(false);
+    }
+  });
+
   it('defaults bypassPermissions to off and keeps it per-namespace', () => {
     const vscode = new FileStateAdapter({ namespace: 'vscode' });
     const standalone = new FileStateAdapter({ namespace: 'standalone' });
@@ -160,7 +176,7 @@ describe('FileStateAdapter', () => {
 
   it('writes state at ~/.pixel-agents/<namespace>-state.json', () => {
     const adapter = new FileStateAdapter({ namespace: 'vscode' });
-    adapter.saveSeats({ '1': { palette: 2, hueShift: 45 } });
+    adapter.saveSeats({ '1': { palette: 2, repeat: 45 } });
     const stateFile = path.join(tempHome, '.pixel-agents', 'vscode-state.json');
     expect(fs.existsSync(stateFile)).toBe(true);
   });

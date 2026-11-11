@@ -11,11 +11,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type * as vscode from 'vscode';
 
-import {
-  CHAR_FRAMES_PER_ROW,
-  MAX_PET_PNG_SIZE,
-  WALL_BITMASK_COUNT,
-} from '../../core/src/assets/constants.js';
+import { MAX_PET_PNG_SIZE, WALL_BITMASK_COUNT } from '../../core/src/assets/constants.js';
 import type {
   FurnitureAsset,
   FurnitureManifest,
@@ -484,48 +480,6 @@ export function mergeCharacterSprites(
     characters: [...a.characters, ...b.characters],
     characterIds: [...(a.characterIds ?? []), ...(b.characterIds ?? [])],
   };
-}
-
-/**
- * Load pre-colored character sprites from assets/characters/ (6 PNGs, each 112×96).
- * Each PNG has 3 direction rows (down, up, right) × 7 frames (16×32 each).
- */
-export async function loadCharacterSprites(
-  assetsRoot: string,
-): Promise<LoadedCharacterSprites | null> {
-  try {
-    const charDir = path.join(assetsRoot, 'assets', 'characters');
-    const characters: CharacterDirectionSprites[] = [];
-    const characterIds: string[] = [];
-
-    const filenames = fs
-      .readdirSync(charDir)
-      .filter((name) => /^char_\d+\.png$/i.test(name))
-      .sort((a, b) => Number(a.match(/\d+/)![0]) - Number(b.match(/\d+/)![0]));
-    if (!filenames.length) return null;
-    for (const filename of filenames) {
-      const filePath = path.join(charDir, filename);
-      try {
-        const pngBuffer = fs.readFileSync(filePath);
-        characters.push(decodeCharacterPng(pngBuffer));
-        characterIds.push('sha256:' + createHash('sha256').update(pngBuffer).digest('hex'));
-      } catch (err) {
-        console.warn(
-          `[AssetLoader] Skipping invalid character ${filename}: ${err instanceof Error ? err.message : err}`,
-        );
-      }
-    }
-
-    console.log(
-      `[AssetLoader] ✅ Loaded ${characters.length} character sprites (${CHAR_FRAMES_PER_ROW} frames × 3 directions each)`,
-    );
-    return characters.length ? { characters, characterIds } : null;
-  } catch (err) {
-    console.error(
-      `[AssetLoader] ❌ Error loading character sprites: ${err instanceof Error ? err.message : err}`,
-    );
-    return null;
-  }
 }
 
 /**

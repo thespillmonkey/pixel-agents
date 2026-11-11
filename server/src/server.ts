@@ -22,7 +22,7 @@ import { loadOrCreateRelayToken } from './relayToken.js';
 import type { ServerConfig, StandaloneAccess } from './serverConfig.js';
 import { isServerConfig, isServerTarget, sameStandaloneAccess } from './serverConfig.js';
 import { loadOrCreateStandaloneToken } from './serverToken.js';
-import type { PtySessionManager } from './terminal/ptySessionManager.js';
+import type { TerminalSessions } from './terminal/terminalSessions.js';
 import { normalizeHostname } from './wsAuth.js';
 
 export type { ServerConfig } from './serverConfig.js';
@@ -73,7 +73,9 @@ export class PixelAgentsServer {
     assetCache?: AssetCache;
     onSetHooksEnabled?: SetHooksEnabledSideEffect;
     onReloadAssets?: ReloadAssetsSideEffect;
-    ptyManager?: PtySessionManager;
+    ptyManager?: TerminalSessions;
+    /** Package root holding dist/hooks/ (standalone; see HttpServerOptions). */
+    packageRoot?: string;
     /** Extra privileged Host names (standalone; see wsAuth.privilegedHostnames). */
     allowedHosts?: readonly string[];
     /** Replace the persisted standalone token, revoking every URL that carried
@@ -154,6 +156,7 @@ export class PixelAgentsServer {
       onSetHooksEnabled: options?.onSetHooksEnabled,
       onReloadAssets: options?.onReloadAssets,
       ptyManager: options?.ptyManager,
+      packageRoot: options?.packageRoot,
       allowedHosts: standalone?.allowedHosts,
     });
 

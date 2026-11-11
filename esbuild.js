@@ -39,19 +39,14 @@ function copyAssets() {
  * Produces a self-contained CJS file with shebang for Claude Code to execute.
  */
 function buildHooks() {
-  const entry = path.join(
-    __dirname,
-    'server',
-    'src',
-    'providers',
-    'hook',
-    'claude',
-    'hooks',
-    'claude-hook.ts',
-  );
-  if (!fs.existsSync(entry)) return;
+  const hooksDir = path.join(__dirname, 'server', 'src', 'providers', 'hook', 'claude', 'hooks');
+  // The hook script, and the status line bridge (Settings → Usage Bars).
+  const entries = ['claude-hook.ts', 'claude-statusline.ts']
+    .map((name) => path.join(hooksDir, name))
+    .filter((entry) => fs.existsSync(entry));
+  if (entries.length === 0) return;
   require('esbuild').buildSync({
-    entryPoints: [entry],
+    entryPoints: entries,
     bundle: true,
     platform: 'node',
     target: 'node18',
@@ -135,6 +130,7 @@ async function main() {
     buildHooks();
     buildOpenClawPlugin();
     await buildCli();
+    await buildPtyHost();
     await buildUninstall();
   }
 }
@@ -183,6 +179,26 @@ async function buildCli() {
   if (!production) {
     console.log('[build] CLI bundled: dist/cli.mjs');
   }
+}
+
+/**
+ * Bundle the PTY host (`pixel-agents --pty-host`). Development only: it is
+ * deliberately left out of package.json's `files`, so the published office
+ * always keeps its terminals in process.
+ */
+async function buildPtyHost() {
+  await esbuild.build({
+    entryPoints: ['server/src/terminal/ptyHostMain.ts'],
+    bundle: true,
+    format: 'cjs',
+    minify: production,
+    sourcemap: !production,
+    platform: 'node',
+    outfile: 'dist/pty-host.js',
+    external: ['@lydell/node-pty', 'node-pty'],
+    define: versionDefine,
+    logLevel: 'silent',
+  });
 }
 
 main().catch((e) => {

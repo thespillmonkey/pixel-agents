@@ -11,12 +11,13 @@ declare global {
         id: number;
         matrixEffect: 'spawn' | 'despawn' | null;
         agentName?: string;
-        palette?: number;
-        hueShift?: number;
         bubbleType: 'permission' | 'waiting' | null;
         waitingAwaitingInput?: boolean;
         isHeadless?: boolean;
         isGreeter?: boolean;
+        /** The character profile it wears, and which copy of it (0 = the first). */
+        palette: number;
+        repeat: number;
       }>;
       /** The character the camera follows (null = free camera). */
       getCameraFollowId?: () => number | null;
@@ -150,12 +151,12 @@ export function installTestHooks(officeStateRef: { current: OfficeState | null }
       id: ch.id,
       matrixEffect: ch.matrixEffect,
       agentName: ch.agentName,
-      palette: ch.palette,
-      hueShift: ch.hueShift,
       bubbleType: ch.bubbleType,
       waitingAwaitingInput: ch.waitingAwaitingInput,
       isHeadless: ch.isHeadless,
       isGreeter: ch.isGreeter,
+      palette: ch.palette,
+      repeat: ch.repeat,
     }));
   };
 
@@ -324,7 +325,7 @@ export function installTestHooks(officeStateRef: { current: OfficeState | null }
   OfficeState.prototype.addAgent = function (
     id,
     preferredPalette,
-    preferredHueShift,
+    preferredRepeat,
     preferredSeatId,
     skipSpawnEffect,
     directoryName,
@@ -334,7 +335,7 @@ export function installTestHooks(officeStateRef: { current: OfficeState | null }
       this,
       id,
       preferredPalette,
-      preferredHueShift,
+      preferredRepeat,
       preferredSeatId,
       skipSpawnEffect,
       directoryName,

@@ -2,13 +2,19 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { CONFIG_FILE_NAME, LAYOUT_FILE_DIR } from './constants.js';
+import {
+  parseCharacterOrder,
+  parseDirectoryCharacters,
+} from '../../core/src/directoryCharacters.js';
+import type { DirectoryCharacterOrder } from '../../core/src/messages.js';
+import { CONFIG_FILE_NAME, PIXEL_AGENTS_DIR } from './constants.js';
 
 export interface AdapterSettings {
   soundEnabled: boolean;
   lastSeenVersion: string;
   alwaysShowLabels: boolean;
   cleanerAgentLabels: boolean;
+  labelsOnlyOnWork: boolean;
   ghostHeadlessAgents: boolean;
   watchAllSessions: boolean;
   hooksInfoShown: boolean;
@@ -30,6 +36,7 @@ export const ADAPTER_SETTING_KEYS = [
   'lastSeenVersion',
   'alwaysShowLabels',
   'cleanerAgentLabels',
+  'labelsOnlyOnWork',
   'ghostHeadlessAgents',
   'watchAllSessions',
   'hooksInfoShown',
@@ -56,6 +63,10 @@ export type HooksConsentState = 'granted' | 'declined';
 export interface UserDirectory {
   name: string;
   path: string;
+  /** Default characters (palette indices), highest priority first. Absent = none. */
+  characters?: number[];
+  /** Absent = 'priority'. */
+  characterOrder?: DirectoryCharacterOrder;
 }
 
 export interface PixelAgentsConfig {
@@ -75,6 +86,10 @@ export interface PixelAgentsConfig {
   /** User-defined Directories. Machine-wide by decision: a Directory defined
    *  from the phone shows up in VS Code and vice versa. */
   directories: UserDirectory[];
+  /** Characters launched most recently, most recent first (profile indices).
+   *  Machine-wide like the profiles themselves, so every office's roster
+   *  agrees. See recentCharacters.ts. */
+  recentCharacters: number[];
 }
 
 const DEFAULT_ADAPTER_SETTINGS: AdapterSettings = {
@@ -82,6 +97,7 @@ const DEFAULT_ADAPTER_SETTINGS: AdapterSettings = {
   lastSeenVersion: '',
   alwaysShowLabels: false,
   cleanerAgentLabels: false,
+  labelsOnlyOnWork: false,
   ghostHeadlessAgents: false,
   watchAllSessions: false,
   hooksInfoShown: false,
@@ -92,7 +108,7 @@ const DEFAULT_ADAPTER_SETTINGS: AdapterSettings = {
 };
 
 function getConfigFilePath(): string {
-  return path.join(os.homedir(), LAYOUT_FILE_DIR, CONFIG_FILE_NAME);
+  return path.join(os.homedir(), PIXEL_AGENTS_DIR, CONFIG_FILE_NAME);
 }
 
 /** Coerce a loose object into the per-provider consent map, dropping entries whose value is not exactly 'granted' or
@@ -158,9 +174,29 @@ export function parseUserDirectories(raw: unknown): UserDirectory[] {
     if (typeof name !== 'string' || typeof dirPath !== 'string' || dirPath.length === 0) {
       continue;
     }
-    out.push({ name, path: dirPath });
+    out.push(withDirectoryCharacters({ name, path: dirPath }, entry));
   }
   return out;
+}
+
+/**
+ * `entry` with the default characters in `raw` (a loose object), stored only
+ * when there is something to store: no defaults, no fields; the default order,
+ * no `characterOrder`.
+ */
+export function withDirectoryCharacters(
+  entry: UserDirectory,
+  raw: { characters?: unknown; characterOrder?: unknown },
+): UserDirectory {
+  const characters = parseDirectoryCharacters(raw.characters);
+  if (characters.length === 0) return { name: entry.name, path: entry.path };
+  const order = parseCharacterOrder(raw.characterOrder);
+  return {
+    name: entry.name,
+    path: entry.path,
+    characters,
+    ...(order === 'random' ? { characterOrder: order } : {}),
+  };
 }
 
 /** Coerce a loose object into a valid AdapterSettings with defaults for missing/wrong-typed fields. */
@@ -183,6 +219,10 @@ function parseAdapterSettings(raw: unknown): AdapterSettings {
       typeof obj.cleanerAgentLabels === 'boolean'
         ? obj.cleanerAgentLabels
         : DEFAULT_ADAPTER_SETTINGS.cleanerAgentLabels,
+    labelsOnlyOnWork:
+      typeof obj.labelsOnlyOnWork === 'boolean'
+        ? obj.labelsOnlyOnWork
+        : DEFAULT_ADAPTER_SETTINGS.labelsOnlyOnWork,
     ghostHeadlessAgents:
       typeof obj.ghostHeadlessAgents === 'boolean'
         ? obj.ghostHeadlessAgents
@@ -217,7 +257,7 @@ export function parseAgentAppearances(raw: unknown): Record<string, string> {
         name.length > 0 &&
         name.length <= 512 &&
         typeof id === 'string' &&
-        /^(sha256:[a-f0-9]{64}|builtin:\d+)$/.test(id),
+        /^(sha256:[a-f0-9]{64}|profile:[A-Za-z0-9_-]{1,64}|builtin:\d+)$/.test(id),
     ),
   );
 }
@@ -231,6 +271,7 @@ function emptyConfig(): PixelAgentsConfig {
     hooksConsent: {},
     hooksEnabled: {},
     directories: [],
+    recentCharacters: [],
   };
 }
 
@@ -252,6 +293,9 @@ export function readConfig(): PixelAgentsConfig {
       hooksConsent: parseHooksConsent(parsed.hooksConsent),
       hooksEnabled: parseHooksEnabled(parsed.hooksEnabled),
       directories: parseUserDirectories(parsed.directories),
+      recentCharacters: Array.isArray(parsed.recentCharacters)
+        ? parsed.recentCharacters.filter((v): v is number => Number.isInteger(v) && v >= 0)
+        : [],
     };
   } catch (err) {
     console.error('[Pixel Agents] Failed to read config file:', err);

@@ -27,6 +27,8 @@ export type ServerMessage =
   | AgentContextUsage
   | LayoutLoaded
   | FurnitureAssetsLoaded
+  | CharacterProfilesLoaded
+  | RecentCharactersLoaded
   | CharacterSpritesLoaded
   | AgentAppearanceOptions
   | AgentAppearanceChanged
@@ -41,12 +43,17 @@ export type ServerMessage =
   | BypassPermissionsUpdated
   | HooksStatus
   | HooksConsentRequest
+  | UsageBridgeStatus
+  | UsageLimits
   | ExternalAssetDirectoriesUpdated
   | AreaMappingsLoaded
+  | CardOrderLoaded
   | DirectoriesLoaded
   | DirectorySaved
   | DirectoryRejected
   | DirectorySuggestions
+  | ConversationsLoaded
+  | ConversationSearchResults
   | TerminalAvailability
   | TerminalSessionOpened
   | TerminalSessionClosed
@@ -59,29 +66,37 @@ export type ClientMessage =
   | CloseAgent
   | SaveAgentSeats
   | SaveLayout
+  | SaveCharacterProfiles
   | SetSoundEnabled
   | SetLastSeenVersion
   | SetAlwaysShowLabels
   | SetCleanerAgentLabels
+  | SetLabelsOnlyOnWork
   | RequestAgentAppearance
   | SaveAgentAppearance
   | SetGhostHeadlessAgents
   | SetHooksEnabled
   | HooksConsentResponse
+  | SetUsageBridgeEnabled
   | SetHooksInfoShown
   | SetWatchAllSessions
   | ExportLayout
   | ImportLayout
+  | ExportFile
   | OpenSessionsFolder
   | AddExternalAssetDirectory
   | RemoveExternalAssetDirectory
   | SaveAreaMappings
+  | SaveCardOrder
   | SetShowAreas
   | SetBypassPermissions
   | SetShowHostDirectories
   | SaveDirectory
   | RemoveDirectory
   | RequestDirectorySuggestions
+  | RequestConversations
+  | SearchConversations
+  | ResumeConversation
   | RequestDiagnostics;
 
 export interface ProviderCapabilities {
@@ -96,7 +111,8 @@ export interface AgentCreated {
   directoryName?: string;
   isExternal?: boolean;
   palette?: number;
-  hueShift?: number;
+  repeat?: number;
+  seatId?: string;
 }
 
 export interface AgentClosed {
@@ -119,7 +135,7 @@ export interface ExistingAgents {
 
 export interface AgentSeatMeta {
   palette?: number;
-  hueShift?: number;
+  repeat?: number;
   seatId?: string;
 }
 
@@ -243,6 +259,73 @@ export interface FurnitureAssetMessage {
   frame?: number;
 }
 
+export interface CharacterProfilesLoaded {
+  type: 'characterProfilesLoaded';
+  profiles: CharacterProfile[];
+  agentLooks?: AgentLook[];
+  saveId?: string;
+  items?: WardrobeItem[];
+}
+
+export interface CharacterProfile {
+  id?: string;
+  name?: string;
+  body: string;
+  eyeShape?: string;
+  eyeRows?: string;
+  utop?: string;
+  under?: string;
+  hair?: string;
+  beard?: string;
+  top?: string;
+  jacket?: string;
+  pants?: string;
+  shoes?: string;
+  full?: string;
+  hat?: string;
+  necklace?: string;
+  lanyard?: string;
+  earrings?: string;
+  shades?: string;
+  hairshades?: string;
+  watch?: string;
+  colors?: Record<string, CharacterColor>;
+  edits?: Record<string, CharacterPixelEdits>;
+  v?: number;
+}
+
+export interface CharacterColor {
+  h: number;
+  s: number;
+  b: number;
+  c: number;
+  colorize?: boolean;
+  palette?: string;
+}
+
+export interface CharacterPixelEdits {
+  cells: Record<string, Record<string, string | null>>;
+}
+
+export interface AgentLook {
+  id: number;
+  palette: number;
+  repeat: number;
+}
+
+export interface WardrobeItem {
+  id: string;
+  piece: string;
+  label: string;
+  base: string;
+  png: string;
+}
+
+export interface RecentCharactersLoaded {
+  type: 'recentCharactersLoaded';
+  recent: number[];
+}
+
 export interface CharacterSpritesLoaded {
   type: 'characterSpritesLoaded';
   characters: CharacterSpriteSet[];
@@ -260,7 +343,7 @@ export interface AgentAppearanceOptions {
   name: string;
   selectedAssetId: string | null;
   palette: number;
-  hueShift: number;
+  repeat: number;
   options: AgentAppearanceOption[];
 }
 
@@ -274,7 +357,7 @@ export interface AgentAppearanceChanged {
   type: 'agentAppearanceChanged';
   id: number;
   palette: number;
-  hueShift: number;
+  repeat: number;
 }
 
 export interface AgentAppearanceSaved {
@@ -330,6 +413,7 @@ export interface SettingsLoaded {
   watchAllSessions: boolean;
   alwaysShowLabels: boolean;
   cleanerAgentLabels: boolean;
+  labelsOnlyOnWork: boolean;
   ghostHeadlessAgents: boolean;
   hooksEnabled: boolean;
   hooksInfoShown: boolean;
@@ -357,6 +441,28 @@ export interface HooksConsentRequest {
   disclosure: string;
 }
 
+export interface UsageBridgeStatus {
+  type: 'usageBridgeStatus';
+  providerId: string;
+  providerName: string;
+  installed: boolean;
+  disclosure: string;
+  error?: string;
+}
+
+export interface UsageLimits {
+  type: 'usageLimits';
+  providerId: string;
+  fiveHour?: UsageWindow;
+  sevenDay?: UsageWindow;
+  updatedAt?: number;
+}
+
+export interface UsageWindow {
+  usedPercentage: number;
+  resetsAt: number;
+}
+
 export interface ExternalAssetDirectoriesUpdated {
   type: 'externalAssetDirectoriesUpdated';
   dirs: string[];
@@ -365,6 +471,11 @@ export interface ExternalAssetDirectoriesUpdated {
 export interface AreaMappingsLoaded {
   type: 'areaMappingsLoaded';
   mappings: Record<string, string[]>;
+}
+
+export interface CardOrderLoaded {
+  type: 'cardOrderLoaded';
+  order: number[];
 }
 
 export interface DirectoriesLoaded {
@@ -376,9 +487,13 @@ export interface Directory {
   name: string;
   path: string;
   source: DirectorySource;
+  characters?: number[];
+  characterOrder?: DirectoryCharacterOrder;
 }
 
 export type DirectorySource = 'user' | 'host';
+
+export type DirectoryCharacterOrder = 'priority' | 'random';
 
 export interface DirectorySaved {
   type: 'directorySaved';
@@ -394,6 +509,42 @@ export interface DirectoryRejected {
 export interface DirectorySuggestions {
   type: 'directorySuggestions';
   paths: string[];
+}
+
+export interface ConversationsLoaded {
+  type: 'conversationsLoaded';
+  directories: DirectoryConversations[];
+}
+
+export interface DirectoryConversations {
+  name: string;
+  path: string;
+  conversations: Conversation[];
+  more?: boolean;
+}
+
+export interface Conversation {
+  sessionId: string;
+  title: string;
+  updatedAt: number;
+  palette?: number;
+  repeat?: number;
+  agentId?: number;
+}
+
+export interface ConversationSearchResults {
+  type: 'conversationSearchResults';
+  query: string;
+  directoryPath?: string;
+  limit: number;
+  results: FoundConversation[];
+  more: boolean;
+}
+
+export interface FoundConversation {
+  directoryPath: string;
+  directoryName: string;
+  conversation: Conversation;
 }
 
 export interface TerminalAvailability {
@@ -425,6 +576,7 @@ export interface WebviewReady {
 export interface LaunchAgent {
   type: 'launchAgent';
   directoryPath?: string;
+  palette?: number;
 }
 
 export interface FocusAgent {
@@ -444,13 +596,20 @@ export interface SaveAgentSeats {
 
 export interface SeatAssignment {
   palette: number;
-  hueShift: number;
+  repeat: number;
   seatId: string | null;
 }
 
 export interface SaveLayout {
   type: 'saveLayout';
   layout: Record<string, any>;
+}
+
+export interface SaveCharacterProfiles {
+  type: 'saveCharacterProfiles';
+  profiles: CharacterProfile[];
+  saveId: string;
+  items?: WardrobeItem[];
 }
 
 export interface SetSoundEnabled {
@@ -470,6 +629,11 @@ export interface SetAlwaysShowLabels {
 
 export interface SetCleanerAgentLabels {
   type: 'setCleanerAgentLabels';
+  enabled: boolean;
+}
+
+export interface SetLabelsOnlyOnWork {
+  type: 'setLabelsOnlyOnWork';
   enabled: boolean;
 }
 
@@ -503,6 +667,12 @@ export interface HooksConsentResponse {
 
 export type HooksConsentChoice = 'install' | 'notNow' | 'never';
 
+export interface SetUsageBridgeEnabled {
+  type: 'setUsageBridgeEnabled';
+  providerId: string;
+  enabled: boolean;
+}
+
 export interface SetHooksInfoShown {
   type: 'setHooksInfoShown';
 }
@@ -518,6 +688,12 @@ export interface ExportLayout {
 
 export interface ImportLayout {
   type: 'importLayout';
+}
+
+export interface ExportFile {
+  type: 'exportFile';
+  filename: string;
+  dataBase64: string;
 }
 
 export interface OpenSessionsFolder {
@@ -537,6 +713,11 @@ export interface RemoveExternalAssetDirectory {
 export interface SaveAreaMappings {
   type: 'saveAreaMappings';
   mappings: Record<string, string[]>;
+}
+
+export interface SaveCardOrder {
+  type: 'saveCardOrder';
+  order: number[];
 }
 
 export interface SetShowAreas {
@@ -559,6 +740,8 @@ export interface SaveDirectory {
   name: string;
   path: string;
   previousPath?: string;
+  characters?: number[];
+  characterOrder?: DirectoryCharacterOrder;
 }
 
 export interface RemoveDirectory {
@@ -568,6 +751,29 @@ export interface RemoveDirectory {
 
 export interface RequestDirectorySuggestions {
   type: 'requestDirectorySuggestions';
+}
+
+export interface RequestConversations {
+  type: 'requestConversations';
+  limits?: ConversationLimit[];
+}
+
+export interface ConversationLimit {
+  directoryPath: string;
+  count: number;
+}
+
+export interface SearchConversations {
+  type: 'searchConversations';
+  query: string;
+  directoryPath?: string;
+  limit: number;
+}
+
+export interface ResumeConversation {
+  type: 'resumeConversation';
+  sessionId: string;
+  directoryPath: string;
 }
 
 export interface RequestDiagnostics {

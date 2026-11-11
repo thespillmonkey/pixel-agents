@@ -8,10 +8,10 @@
 /** @public */
 export {
   CONFIG_FILE_NAME,
-  LAYOUT_FILE_DIR,
+  JSON_FILE_POLL_INTERVAL_MS,
   LAYOUT_FILE_NAME,
-  LAYOUT_FILE_POLL_INTERVAL_MS,
   LAYOUT_REVISION_KEY,
+  PIXEL_AGENTS_DIR,
 } from '../../server/src/constants.js';
 
 // ── Settings Persistence (VS Code globalState keys) ─────────
@@ -19,6 +19,7 @@ export const GLOBAL_KEY_SOUND_ENABLED = 'pixel-agents.soundEnabled';
 export const GLOBAL_KEY_LAST_SEEN_VERSION = 'pixel-agents.lastSeenVersion';
 export const GLOBAL_KEY_ALWAYS_SHOW_LABELS = 'pixel-agents.alwaysShowLabels';
 export const GLOBAL_KEY_CLEANER_AGENT_LABELS = 'pixel-agents.cleanerAgentLabels';
+export const GLOBAL_KEY_LABELS_ONLY_ON_WORK = 'pixel-agents.labelsOnlyOnWork';
 export const GLOBAL_KEY_GHOST_HEADLESS_AGENTS = 'pixel-agents.ghostHeadlessAgents';
 export const GLOBAL_KEY_WATCH_ALL_SESSIONS = 'pixel-agents.watchAllSessions';
 export const GLOBAL_KEY_HOOKS_INFO_SHOWN = 'pixel-agents.hooksInfoShown';
